@@ -49,22 +49,39 @@ enum ClaudeCredentials {
     private static let frameworkQueue = DispatchQueue(label: "dev.notchstats.claude.kc", qos: .utility)
     private static let cliQueue = DispatchQueue(label: "dev.notchstats.claude.cli", qos: .utility)
 
-    static func resolveAsync() async -> Resolution {
+    private static var cached: (resolution: Resolution, at: Date)?
+    private static let cacheLifetime: TimeInterval = 300
+
+    private static func cache(_ resolution: Resolution) -> Resolution {
+        cached = (resolution, Date())
+        return resolution
+    }
+
+    /// Drops the cache so the next resolve re-reads the keychain (e.g. after a 401).
+    static func invalidate() { cached = nil }
+
+    static func resolveAsync(force: Bool = false) async -> Resolution {
+        if !force, let cached, Date().timeIntervalSince(cached.at) < cacheLifetime {
+            return cached.resolution
+        }
         if let raw = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"],
            !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return .found(Credential(token: raw, kind: .init(token: raw), expiresAt: nil), .environment)
         }
 
-        let framework: (credential: Credential?, denied: Bool) =
-            await bounded(seconds: 2.5, on: frameworkQueue, frameworkCredential) ?? (nil, false)
-        if let credential = framework.credential { return .found(credential, .keychain) }
-
+        // Prefer the same lookup Claude Code performs. Reading the keychain
+        // through the Security framework instead triggers a "enter your login
+        // keychain password" dialog, which `security` avoids.
         if let credential = await bounded(seconds: 6, on: cliQueue, cliCredential) ?? nil {
-            return .found(credential, .securityCLI)
+            return cache(.found(credential, .securityCLI))
         }
 
+        let framework: (credential: Credential?, denied: Bool) =
+            await bounded(seconds: 2.5, on: frameworkQueue, frameworkCredential) ?? (nil, false)
+        if let credential = framework.credential { return cache(.found(credential, .keychain)) }
+
         if let data = fileData(), let credential = credential(from: data) {
-            return .found(credential, .file)
+            return cache(.found(credential, .file))
         }
 
         if framework.denied {

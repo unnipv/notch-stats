@@ -123,14 +123,15 @@ you how to refresh it, not a blank row.
 **No special permissions.** The paths above are ordinary files in your home
 directory; macOS never asks for Full Disk Access or Accessibility.
 
-**Claude and the keychain.** macOS gates another app's keychain item behind a
-one-time approval prompt, so the first Claude refresh may ask you to allow
-NotchStats. NotchStats tries the Security framework first and falls back to the
-same `/usr/bin/security` lookup Claude Code itself uses. If you sign in with an
-**API key** rather than a Pro/Max account, Anthropic reports that usage limits
-don't apply to API organisations — NotchStats shows that instead of inventing a
-number. A pending prompt is time-boxed, so it can never stall the other
-providers.
+**Claude and the keychain.** NotchStats reads Claude's credential the same way
+Claude Code does — `/usr/bin/security find-generic-password` — falling back to
+the Security framework and then `~/.claude/.credentials.json`. The result is
+cached for a few minutes so it isn't re-read on every refresh. (Reading the
+keychain through the framework alone makes macOS ask for your login keychain
+password, which this order avoids.) If you sign in with an **API key** rather
+than a Pro/Max account, Anthropic reports that usage limits don't apply to API
+organisations — NotchStats shows that instead of inventing a number. Every
+provider is time-boxed, so a pending prompt can never stall the others.
 
 ## Running it
 

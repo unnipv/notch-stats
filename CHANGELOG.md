@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Read the Claude credential with `security` **first**, the way Claude Code
+  does. Reading through the Security framework alone makes macOS demand your
+  login keychain password; the CLI lookup doesn't. The credential is cached for
+  a few minutes so it isn't re-read on every refresh.
+
 ## 0.2.0
 
 - **Anthropic / Claude support.** Reads the credential Claude Code already

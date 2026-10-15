@@ -56,6 +56,8 @@ struct ClaudeProvider: UsageProvider {
             case 400 where Self.isAPIOrganisationError(data):
                 return Self.failure("API key login — usage limits don't apply")
             case 401:
+                // The credential may have been rotated underneath us.
+                ClaudeCredentials.invalidate()
                 return Self.failure(credential.kind == .oauth
                                     ? "Auth expired — run `claude`"
                                     : "API key rejected")
