@@ -74,6 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         item.menu = menu
         statusItem = item
+
+        if ProcessInfo.processInfo.environment["NOTCHSTATS_DUMP"] != nil {
+            let visible = item.button?.window != nil
+            FileHandle.standardError.write(Data("[statusItem] created=\(visible)\n".utf8))
+        }
     }
 
     @objc private func refreshNow() {
