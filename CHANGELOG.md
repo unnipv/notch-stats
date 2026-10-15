@@ -6,6 +6,8 @@ Initial release.
 
 - Notch-native overlay pinned to the physical camera housing, with click-through
   everywhere else.
+- Usage is expressed as **remaining** budget (ring + percentage), so an empty
+  ring reads as "almost out" rather than a full ring labelled 100%.
 - Collapsed, peek (hover) and expanded (click) states.
 - Usage providers: Codex / ChatGPT (5h + weekly), OpenCode Go (rolling, weekly,
   monthly) and OpenRouter credit.

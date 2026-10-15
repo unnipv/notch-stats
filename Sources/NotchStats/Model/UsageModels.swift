@@ -4,9 +4,14 @@ import Foundation
 struct UsageWindow: Identifiable, Sendable {
     let id: String
     let label: String
-    /// Normalised fraction in `0...1`.
+    /// Normalised fraction of the allowance *used*, in `0...1`.
     let percent: Double
     let resetsAt: Date?
+
+    /// Fraction still available. We surface this to the user: a nearly-empty
+    /// ring reads as "almost out", whereas a full ring reading "100%" reads as
+    /// "plenty" even when the budget is exhausted.
+    var remaining: Double { max(0, min(1, 1 - percent)) }
 }
 
 /// Everything we know about one provider at a point in time.

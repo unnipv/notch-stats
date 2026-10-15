@@ -98,8 +98,19 @@ final class ParsingTests: XCTestCase {
         let usage = OpenRouterProvider.parse(Data(json.utf8))
 
         XCTAssertNil(usage.error)
-        XCTAssertEqual(usage.note, "$3.53 left")
+        XCTAssertEqual(usage.note, "$3.53")
         XCTAssertEqual(usage.windows.first?.percent ?? 0, 0.882, accuracy: 0.01)
+        XCTAssertEqual(usage.windows.first?.remaining ?? 0, 0.118, accuracy: 0.01)
+    }
+
+    func testRemainingIsInverseOfUsed() {
+        let exhausted = UsageWindow(id: "a", label: "5h", percent: 1.0, resetsAt: nil)
+        XCTAssertEqual(exhausted.remaining, 0.0)
+        let half = UsageWindow(id: "b", label: "5h", percent: 0.25, resetsAt: nil)
+        XCTAssertEqual(half.remaining, 0.75, accuracy: 0.0001)
+        // Out-of-range input must not produce a negative or >1 remainder.
+        let over = UsageWindow(id: "c", label: "5h", percent: 1.5, resetsAt: nil)
+        XCTAssertEqual(over.remaining, 0.0)
     }
 
     func testOpenRouterRejectsGarbage() {

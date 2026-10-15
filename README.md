@@ -15,6 +15,9 @@ Hover the notch for a quick read. Click it for the full panel.
 
 ## Features
 
+All figures show **what's left**, not what's been used: a nearly-empty ring means
+you're almost out.
+
 - **Codex / ChatGPT limits** — the 5-hour and weekly windows, with reset timers.
 - **OpenCode Go limits** — the rolling (5h), weekly and monthly allowances from
   the official quota endpoint.

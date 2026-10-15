@@ -116,8 +116,10 @@ struct Ear: View {
 
     var body: some View {
         if let provider, let headline = provider.headline {
+            // Ring and number show what's *left*; colour still reflects how much
+            // has been used, so an empty red ring means "you're out".
             let color = Theme.urgency(headline.percent, base: Color(hex: provider.accentHex))
-            let ring = Ring(progress: headline.percent, color: color,
+            let ring = Ring(progress: headline.remaining, color: color,
                             size: ringSize, lineWidth: detailed ? 4 : 3, live: live)
 
             HStack(spacing: detailed ? 8 : 5) {
@@ -134,7 +136,7 @@ struct Ear: View {
     @ViewBuilder
     private func label(_ provider: ProviderUsage, _ window: UsageWindow) -> some View {
         VStack(alignment: side == .left ? .leading : .trailing, spacing: 1) {
-            Text(Format.percent(window.percent))
+            Text(Format.percent(window.remaining))
                 .font(.system(size: detailed ? 15 : 11.5,
                               weight: detailed ? .bold : .semibold,
                               design: .rounded))
@@ -142,9 +144,9 @@ struct Ear: View {
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
-                .numericFlip(window.percent)
+                .numericFlip(window.remaining)
             if detailed, let reset = Format.countdown(to: window.resetsAt) {
-                Text("resets \(reset)")
+                Text("left · resets \(reset)")
                     .font(.system(size: 9))
                     .tracking(0.2)
                     .monospacedDigit()
@@ -316,7 +318,7 @@ struct ProviderRow: View {
                 }
                 .frame(width: 38, height: 38)
             } else {
-                Ring(progress: provider.headline?.percent ?? 0,
+                Ring(progress: provider.headline?.remaining ?? 0,
                      color: tint,
                      size: 38, lineWidth: 5)
             }
@@ -361,7 +363,7 @@ struct ProviderRow: View {
         if let error = provider.error { return error }
         var parts: [String] = []
         if let headline = provider.headline {
-            var text = headline.label
+            var text = "\(Format.percent(headline.remaining)) left"
             if let reset = Format.countdown(to: headline.resetsAt) { text += " · resets \(reset)" }
             parts.append(text)
         }
@@ -377,25 +379,25 @@ struct MiniStat: View {
     var body: some View {
         let tint = Theme.urgency(window.percent, base: color)
         VStack(spacing: 3) {
-            Text(window.label.uppercased())
+            Text("\(window.label.uppercased()) LEFT")
                 .font(.system(size: 8, weight: .semibold))
                 .tracking(0.6)
                 .foregroundStyle(Theme.subtext)
-            Text(Format.percent(window.percent))
+            Text(Format.percent(window.remaining))
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.white)
-                .numericFlip(window.percent)
+                .numericFlip(window.remaining)
             Capsule()
                 .fill(tint.opacity(0.18))
                 .frame(width: 36, height: 3)
                 .overlay(alignment: .leading) {
                     Capsule()
                         .fill(tint)
-                        .frame(width: max(3, 36 * min(1, max(0, window.percent))), height: 3)
+                        .frame(width: max(3, 36 * window.remaining), height: 3)
                 }
         }
         .frame(minWidth: 44)
-        .animation(.easeOut(duration: 0.5), value: window.percent)
+        .animation(.easeOut(duration: 0.5), value: window.remaining)
     }
 }

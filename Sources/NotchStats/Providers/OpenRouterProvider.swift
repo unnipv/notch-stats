@@ -45,7 +45,7 @@ struct OpenRouterProvider: UsageProvider {
 
         return ProviderUsage(id: id, name: name, accentHex: accent, order: order,
                              windows: [window],
-                             note: String(format: "$%.2f left", remaining),
+                             note: String(format: "$%.2f", remaining),
                              error: nil)
     }
 
