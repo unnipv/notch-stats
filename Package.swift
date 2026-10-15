@@ -12,6 +12,11 @@ let package = Package(
             name: "NotchStats",
             path: "Sources/NotchStats",
             linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
+        .testTarget(
+            name: "NotchStatsTests",
+            dependencies: ["NotchStats"],
+            path: "Tests/NotchStatsTests"
         )
     ]
 )

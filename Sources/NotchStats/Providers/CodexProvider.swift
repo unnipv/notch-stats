@@ -9,51 +9,60 @@ struct CodexProvider: UsageProvider {
 
     func fetch() async -> ProviderUsage {
         guard let token = Self.accessToken() else {
-            return fail("No credentials — run `codex login`")
+            return Self.failure("No credentials — run `codex login`")
         }
 
         var request = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 15
         request.setValue("NotchStats", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 15
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if status == 401 { return fail("Auth expired — run `codex login`") }
-            guard status == 200 else { return fail("HTTP \(status)") }
-
-            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return fail("Parse error")
-            }
-            let rateLimit = object["rate_limit"] as? [String: Any] ?? [:]
-
-            var windows: [UsageWindow] = []
-            if let w = Self.window(id: "5h", label: "5h", rateLimit["primary_window"]) { windows.append(w) }
-            if let w = Self.window(id: "7d", label: "Weekly", rateLimit["secondary_window"]) { windows.append(w) }
-
-            let plan = object["plan_type"] as? String
-            return ProviderUsage(id: Self.id, name: Self.name, accentHex: Self.accent, order: Self.order,
-                                 windows: windows, note: plan.map { "\($0.capitalized) plan" }, error: nil)
+            if status == 401 { return Self.failure("Auth expired — run `codex login`") }
+            guard status == 200 else { return Self.failure("HTTP \(status)") }
+            return Self.parse(data)
         } catch {
-            return fail(error.localizedDescription)
+            return Self.failure(error.localizedDescription)
         }
     }
 
-    private func fail(_ message: String) -> ProviderUsage {
-        .failure(id: Self.id, name: Self.name, accentHex: Self.accent, order: Self.order, message: message)
+    // MARK: - Pure parsing (unit-tested)
+
+    static func parse(_ data: Data) -> ProviderUsage {
+        guard let any = try? JSONSerialization.jsonObject(with: data),
+              let object = any as? [String: Any] else {
+            return failure("Parse error")
+        }
+
+        let rateLimit = object["rate_limit"] as? [String: Any] ?? [:]
+        var windows: [UsageWindow] = []
+        if let window = window(id: "5h", label: "5h", rateLimit["primary_window"]) { windows.append(window) }
+        if let window = window(id: "7d", label: "Weekly", rateLimit["secondary_window"]) { windows.append(window) }
+
+        let plan = object["plan_type"] as? String
+        return ProviderUsage(id: id, name: name, accentHex: accent, order: order,
+                             windows: windows,
+                             note: plan.map { "\($0.capitalized) plan" },
+                             error: windows.isEmpty ? "No data" : nil)
     }
 
-    private static func window(id: String, label: String, _ object: Any?) -> UsageWindow? {
+    static func failure(_ message: String) -> ProviderUsage {
+        .failure(id: id, name: name, accentHex: accent, order: order, message: message)
+    }
+
+    static func window(id: String, label: String, _ object: Any?) -> UsageWindow? {
         guard let dict = object as? [String: Any], let used = asDouble(dict["used_percent"]) else { return nil }
         let reset = asDouble(dict["reset_at"]).map { Date(timeIntervalSince1970: $0) }
         return UsageWindow(id: id, label: label, percent: max(0, min(1, used / 100)), resetsAt: reset)
     }
 
-    private static func accessToken() -> String? {
+    static func accessToken() -> String? {
         let path = NSHomeDirectory() + "/.codex/auth.json"
         guard let data = FileManager.default.contents(atPath: path),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let any = try? JSONSerialization.jsonObject(with: data),
+              let object = any as? [String: Any],
               let tokens = object["tokens"] as? [String: Any],
               let token = tokens["access_token"] as? String else { return nil }
         return token
