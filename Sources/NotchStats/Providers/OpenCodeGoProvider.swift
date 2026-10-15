@@ -9,13 +9,19 @@ struct OpenCodeGoProvider: UsageProvider {
     static let id = "opencode"
     static let name = "OpenCode Go"
     static let accent = "#B47BFF"
-    static let order = 1
+    static let order = 2
 
     private static let windowLabels: [(key: String, label: String)] = [
         ("rolling", "5h"),
         ("weekly", "Weekly"),
         ("monthly", "Monthly")
     ]
+
+    var id: String { Self.id }
+    var name: String { Self.name }
+    var accentHex: String { Self.accent }
+    var order: Int { Self.order }
+
 
     func fetch() async -> ProviderUsage {
         guard let credential = OpenCodeDB.credentialJSON(integrationIDs: ["opencode-go", "opencode"]),

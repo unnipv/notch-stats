@@ -39,7 +39,7 @@ private final class ScreenIsland {
 
     /// The window is always this big; the island is drawn inside and
     /// hit-tested against its current size.
-    private static let maxSize = CGSize(width: 680, height: 460)
+    private static let maxSize = CGSize(width: 680, height: 500)
 
     init(store: AppStore, geometry: IslandGeometry) {
         self.geometry = geometry

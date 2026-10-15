@@ -5,7 +5,13 @@ struct OpenRouterProvider: UsageProvider {
     static let id = "openrouter"
     static let name = "OpenRouter"
     static let accent = "#7E8BF5"
-    static let order = 2
+    static let order = 3
+
+    var id: String { Self.id }
+    var name: String { Self.name }
+    var accentHex: String { Self.accent }
+    var order: Int { Self.order }
+
 
     func fetch() async -> ProviderUsage {
         guard let credential = OpenCodeDB.credentialJSON(integrationIDs: ["openrouter"]),

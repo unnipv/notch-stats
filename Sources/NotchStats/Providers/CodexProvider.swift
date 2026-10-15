@@ -7,6 +7,12 @@ struct CodexProvider: UsageProvider {
     static let accent = "#10A37F"
     static let order = 0
 
+    var id: String { Self.id }
+    var name: String { Self.name }
+    var accentHex: String { Self.accent }
+    var order: Int { Self.order }
+
+
     func fetch() async -> ProviderUsage {
         guard let token = Self.accessToken() else {
             return Self.failure("No credentials — run `codex login`")

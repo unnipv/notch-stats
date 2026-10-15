@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0
+
+- **Anthropic / Claude support.** Reads the credential Claude Code already
+  wrote (keychain via the Security framework, falling back to the same
+  `/usr/bin/security` lookup Claude Code uses, then
+  `~/.claude/.credentials.json`) and reports the 5-hour and weekly windows.
+- Honest API-key handling: Anthropic reports that usage limits do not apply to
+  API organisations, so that is what the row says instead of a fabricated
+  number.
+- Each provider is now time-boxed. A blocked keychain prompt or a stalled
+  connection can no longer stall the other providers — previously one hang left
+  the whole panel stuck on "Connecting…".
+- Expanded panel is taller to fit four providers.
+
 ## 0.1.0
 
 Initial release.

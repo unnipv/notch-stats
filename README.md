@@ -39,6 +39,9 @@ All figures show **what's left**, not what's been used: a nearly-empty ring mean
 you're almost out.
 
 - **Codex / ChatGPT limits** — the 5-hour and weekly windows, with reset timers.
+- **Claude limits** — the 5-hour and weekly windows when you sign in with a
+  Pro/Max account. An API-key login has no usage limits, and NotchStats says so
+  rather than showing a made-up number.
 - **OpenCode Go limits** — the rolling (5h), weekly and monthly allowances from
   the official quota endpoint, including when you're rate-limited.
 - **OpenRouter credit** — remaining balance, straight from the API.
@@ -57,6 +60,7 @@ you're almost out.
 - A MacBook with a notch (falls back to a menu-bar pill elsewhere).
 - OpenCode v2 for OpenCode Go usage and live OpenCode sessions.
 - Codex for Codex limits and Codex sessions.
+- Claude Code for Claude limits.
 
 ## Install
 
@@ -103,6 +107,7 @@ If a provider isn't set up, its row shows an actionable caption (for example
 | Provider | What you need first | Where NotchStats reads it |
 | --- | --- | --- |
 | **Codex / ChatGPT** | Sign in with the Codex CLI: `codex login` | `~/.codex/auth.json` |
+| **Claude** | Sign in with Claude Code: `claude` | macOS keychain (or `~/.claude/.credentials.json`) |
 | **OpenCode Go** | Subscribe to Go, then `/connect` in OpenCode (or `opencode auth login`) and pick **OpenCode Go** | `~/.local/share/opencode/opencode.db` → `credential` |
 | **OpenRouter** | Add your OpenRouter key in OpenCode's auth | `~/.local/share/opencode/opencode.db` → `credential` |
 | **Live OpenCode sessions** | Use OpenCode v2 normally | `opencode.db` → `session_v2`, `session_message` |
@@ -116,7 +121,16 @@ tokens — your CLIs own them. If a token has expired you'll see a caption telli
 you how to refresh it, not a blank row.
 
 **No special permissions.** The paths above are ordinary files in your home
-directory, so macOS never asks for Full Disk Access or Accessibility.
+directory; macOS never asks for Full Disk Access or Accessibility.
+
+**Claude and the keychain.** macOS gates another app's keychain item behind a
+one-time approval prompt, so the first Claude refresh may ask you to allow
+NotchStats. NotchStats tries the Security framework first and falls back to the
+same `/usr/bin/security` lookup Claude Code itself uses. If you sign in with an
+**API key** rather than a Pro/Max account, Anthropic reports that usage limits
+don't apply to API organisations — NotchStats shows that instead of inventing a
+number. A pending prompt is time-boxed, so it can never stall the other
+providers.
 
 ## Running it
 
@@ -148,13 +162,14 @@ endpoints. Nothing is uploaded anywhere.
 | Widget | Source |
 | --- | --- |
 | Codex / ChatGPT limits | `~/.codex/auth.json` → `chatgpt.com/backend-api/wham/usage` |
+| Claude limits | keychain → `api.anthropic.com/api/oauth/usage` |
 | OpenCode Go limits | `opencode.db` credential → `opencode.ai/zen/go/v1/usage` |
 | OpenRouter credit | `opencode.db` credential → `openrouter.ai/api/v1/credits` |
 | OpenCode sessions | read-only `~/.local/share/opencode/opencode.db` (`session_v2`, `session_message`) |
 | Codex sessions | tail of the newest `~/.codex/sessions/**/rollout-*.jsonl` |
 
-The usage endpoints for Codex and OpenCode Go are the same undocumented ones
-their own clients use, so they can change without notice — that's why
+The usage endpoints for Codex, Claude and OpenCode Go are the same undocumented
+ones their own clients use, so they can change without notice — that's why
 NotchStats shows an explicit error caption rather than a wrong number.
 
 ## Performance
@@ -183,7 +198,8 @@ subprocesses. That trade buys and costs:
   no socket, no API keys to paste. It reads what your CLIs already wrote.
 - **Read-only credentials.** It never rotates or rewrites your tokens, so it
   can't break your logins.
-- **OpenCode Go + OpenRouter** support, which several notch apps don't have.
+- **Codex + Claude + OpenCode Go + OpenRouter** in one place, including
+  OpenCode Go quota, which several notch apps don't have.
 
 **Where others are ahead**
 
@@ -202,7 +218,8 @@ subprocesses. That trade buys and costs:
 **Honest gaps in NotchStats**
 
 - macOS 14+, and OpenCode Go usage needs OpenCode v2.
-- No Claude/Anthropic limits yet.
+- No local token/cost estimates, charts or threshold alerts.
+- Claude limits need a Pro/Max login; API-key accounts have none to show.
 - No auto-update; unsigned (ad-hoc) builds.
 - Codex session state is coarse — it summarises the newest rollout file.
 

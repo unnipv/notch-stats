@@ -39,6 +39,7 @@ final class AppStore {
 
     private let engines: [UsageProvider] = [
         CodexProvider(),
+        ClaudeProvider(),
         OpenCodeGoProvider(),
         OpenRouterProvider()
     ]
@@ -71,7 +72,7 @@ final class AppStore {
                           height: geometry.barHeight)
         case .expanded:
             let width = min(geometry.screen.frame.width - 120, 560)
-            return CGSize(width: width, height: geometry.barHeight + 318)
+            return CGSize(width: width, height: geometry.barHeight + 400)
         }
     }
 
@@ -123,7 +124,13 @@ final class AppStore {
         let engines = self.engines
         let results = await withTaskGroup(of: ProviderUsage.self) { group -> [ProviderUsage] in
             for engine in engines {
-                group.addTask { await engine.fetch() }
+                // Fence each provider so one that blocks (a keychain prompt, a
+                // stalled connection) can never hold up the others.
+                group.addTask {
+                    await withTimeout(seconds: 20, fallback: engine.timedOut()) {
+                        await engine.fetch()
+                    }
+                }
             }
             var collected: [ProviderUsage] = []
             for await result in group { collected.append(result) }
