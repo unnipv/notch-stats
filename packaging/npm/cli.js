@@ -11,7 +11,7 @@ const { mkdtempSync, rmSync, existsSync, cpSync } = require("node:fs");
 const { tmpdir, homedir } = require("node:os");
 const { join } = require("node:path");
 
-const REPO = process.env.NOTCHSTATS_REPO || "notch-stats/notch-stats";
+const REPO = process.env.NOTCHSTATS_REPO || "unnipv/notch-stats";
 const APP_NAME = "NotchStats";
 const ASSET = `${APP_NAME}.zip`;
 

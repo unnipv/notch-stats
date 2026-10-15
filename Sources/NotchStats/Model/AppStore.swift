@@ -86,6 +86,14 @@ final class AppStore {
     // MARK: - Lifecycle
 
     func start() {
+        // Documentation/screenshot mode: fictional data, no network, no reads.
+        if ProcessInfo.processInfo.environment["NOTCHSTATS_DEMO"] == "1" {
+            providers = DemoData.providers
+            sessions = DemoData.sessions
+            lastRefresh = Date()
+            return
+        }
+
         sessionMonitor.onChange = { [weak self] list in
             Task { @MainActor in self?.sessions = list }
         }

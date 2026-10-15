@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-REPO="${NOTCHSTATS_REPO:-notch-stats/notch-stats}"
+REPO="${NOTCHSTATS_REPO:-unnipv/notch-stats}"
 APP_NAME="NotchStats"
 ASSET="${APP_NAME}.zip"
 TMP="$(mktemp -d)"
