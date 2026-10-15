@@ -61,10 +61,10 @@ struct CollapsedView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Ear(provider: store.provider("codex"))
+            Ear(provider: store.provider("codex"), live: store.isAgentLive(.codex))
                 .frame(width: store.earWidth, alignment: .leading)
             Spacer(minLength: 0)
-            Ear(provider: store.provider("opencode"))
+            Ear(provider: store.provider("opencode"), live: store.isAgentLive(.opencode))
                 .frame(width: store.earWidth, alignment: .trailing)
         }
         .frame(maxHeight: .infinity)
@@ -73,12 +73,13 @@ struct CollapsedView: View {
 
 struct Ear: View {
     let provider: ProviderUsage?
+    var live: Bool = false
 
     var body: some View {
         if let provider, let headline = provider.headline {
             let color = Theme.urgency(headline.percent, base: Color(hex: provider.accentHex))
             HStack(spacing: 5) {
-                Ring(progress: headline.percent, color: color, size: 14, lineWidth: 3)
+                Ring(progress: headline.percent, color: color, size: 14, lineWidth: 3, live: live)
                 Text(Format.percent(headline.percent))
                     .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                     .monospacedDigit()
@@ -158,36 +159,24 @@ struct ExpandedView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            VStack(spacing: 8) {
-                if store.providers.isEmpty {
-                    Text("Loading…")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.subtext)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 24)
-                } else {
-                    ForEach(store.providers) { provider in
-                        ProviderRow(provider: provider)
-                    }
-                }
+            switch store.page {
+            case .usage: usageList
+            case .activity: ActivityView(store: store)
             }
-            .padding(.horizontal, 12)
             Spacer(minLength: 0)
         }
         .padding(.bottom, 14)
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Text("USAGE")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(1.2)
-                .foregroundStyle(Theme.subtext)
+        HStack(spacing: 12) {
+            tab("USAGE", .usage)
+            tab("ACTIVITY", .activity, badge: store.liveAgents.isEmpty ? nil : store.liveAgents.count)
             Spacer()
             if store.refreshing {
                 ProgressView().controlSize(.small).scaleEffect(0.7)
             } else if let last = store.lastRefresh {
-                Text("updated \(Format.countdown(to: last.addingTimeInterval(60)) ?? "now")")
+                Text("updated \(Format.ago(last))")
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.subtext)
             }
@@ -195,6 +184,48 @@ struct ExpandedView: View {
         .padding(.horizontal, 18)
         .padding(.top, 14)
         .padding(.bottom, 10)
+    }
+
+    private func tab(_ title: String, _ page: AppStore.Page, badge: Int? = nil) -> some View {
+        let selected = store.page == page
+        return Button {
+            store.page = page
+        } label: {
+            HStack(spacing: 5) {
+                Text(title)
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(1.1)
+                if let badge {
+                    Text("\(badge)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Theme.opencode))
+                }
+            }
+            .foregroundStyle(selected ? .white : Theme.subtext)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .animation(.easeOut(duration: 0.15), value: selected)
+    }
+
+    @ViewBuilder private var usageList: some View {
+        VStack(spacing: 8) {
+            if store.providers.isEmpty {
+                Text("Loading…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.subtext)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 24)
+            } else {
+                ForEach(store.providers) { provider in
+                    ProviderRow(provider: provider)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
     }
 }
 

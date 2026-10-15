@@ -11,9 +11,16 @@ final class AppStore {
         case expanded
     }
 
+    enum Page {
+        case usage
+        case activity
+    }
+
     var state: IslandState = .collapsed
+    var page: Page = .usage
     var geo: NotchGeometry = .current()
     var providers: [ProviderUsage] = []
+    var sessions: [AgentSession] = []
     var refreshing = false
     var lastRefresh: Date?
 
@@ -22,6 +29,8 @@ final class AppStore {
         OpenCodeGoProvider(),
         OpenRouterProvider()
     ]
+
+    private let sessionMonitor = SessionMonitor()
 
     private var hoverTask: Task<Void, Never>?
     private var forcedState = false
@@ -37,6 +46,7 @@ final class AppStore {
         case "collapsed": forcedState = true
         default: break
         }
+        if ProcessInfo.processInfo.environment["NOTCHSTATS_PAGE"] == "activity" { page = .activity }
     }
 
     var islandSize: CGSize {
@@ -47,7 +57,7 @@ final class AppStore {
             return CGSize(width: geo.notchWidth + 210, height: geo.barHeight)
         case .expanded:
             let width = min(geo.screen.frame.width - 120, 560)
-            return CGSize(width: width, height: geo.barHeight + 272)
+            return CGSize(width: width, height: geo.barHeight + 318)
         }
     }
 
@@ -62,6 +72,11 @@ final class AppStore {
     // MARK: - Lifecycle
 
     func start() {
+        sessionMonitor.onChange = { [weak self] list in
+            Task { @MainActor in self?.sessions = list }
+        }
+        sessionMonitor.start()
+
         Task { @MainActor in
             await refresh()
             while !Task.isCancelled {
@@ -70,6 +85,15 @@ final class AppStore {
                 await refresh()
             }
         }
+    }
+
+    /// Agents with a session that is currently working.
+    var liveAgents: Set<AgentKind> {
+        Set(sessions.filter { $0.isLive() }.map(\.agent))
+    }
+
+    func isAgentLive(_ kind: AgentKind) -> Bool {
+        liveAgents.contains(kind)
     }
 
     func refreshNow() {

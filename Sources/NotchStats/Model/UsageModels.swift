@@ -45,6 +45,17 @@ enum Format {
         if hours > 0 { return "\(hours)h \(minutes)m" }
         return "\(minutes)m"
     }
+    /// Compact "time ago": "now", "42s", "7m", "3h", "2d".
+    static func ago(_ date: Date, now: Date = Date()) -> String {
+        let seconds = now.timeIntervalSince(date)
+        if seconds < 5 { return "now" }
+        if seconds < 60 { return "\(Int(seconds))s" }
+        let minutes = Int(seconds) / 60
+        if minutes < 60 { return "\(minutes)m" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)h" }
+        return "\(hours / 24)d"
+    }
 }
 
 /// Tolerant numeric coercion for JSON values that may arrive as Int/Double/String.
