@@ -1,6 +1,6 @@
 cask "notch-stats" do
   version "0.2.0"
-  sha256 "ecc718df24cef0d7d78ab43f242952e8d5ea6af1b893021e4ea195819909ed94"
+  sha256 "094fe3ed34654d8ce32c7d0fa66274cf244d4e2fe9d5a65c64e777bf5b006426"
 
   url "https://github.com/unnipv/notch-stats/releases/download/v#{version}/NotchStats.zip"
   name "NotchStats"
