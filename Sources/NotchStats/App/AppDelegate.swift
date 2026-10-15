@@ -38,16 +38,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            let img = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent",
-                              accessibilityDescription: "NotchStats")
-            img?.isTemplate = true
-            button.image = img
+            let image = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent",
+                                accessibilityDescription: "NotchStats")
+            image?.isTemplate = true
+            button.image = image
+            button.toolTip = "NotchStats"
         }
 
         let menu = NSMenu()
+
+        let title = NSMenuItem(title: "NotchStats", action: nil, keyEquivalent: "")
+        title.isEnabled = false
+        menu.addItem(title)
+        menu.addItem(.separator())
+
         let refresh = NSMenuItem(title: "Refresh Now", action: #selector(refreshNow), keyEquivalent: "r")
         refresh.target = self
         menu.addItem(refresh)
+
+        let external = NSMenuItem(title: "Show on External Displays",
+                                  action: #selector(toggleExternalDisplays), keyEquivalent: "")
+        external.target = self
+        external.state = store.showOnExternalDisplays ? .on : .off
+        menu.addItem(external)
 
         let login = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         login.target = self
@@ -65,6 +78,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func refreshNow() {
         store.refreshNow()
+    }
+
+    @objc private func toggleExternalDisplays(_ sender: NSMenuItem) {
+        let enable = sender.state != .on
+        store.showOnExternalDisplays = enable
+        sender.state = enable ? .on : .off
+        island?.refreshDisplays()
     }
 
     @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {

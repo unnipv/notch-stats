@@ -29,6 +29,14 @@ final class AppStore {
     var refreshing = false
     var lastRefresh: Date?
 
+    /// Draw a floating pill on displays without a notch. Off by default: it
+    /// floats above the menu bar and can cover other apps.
+    var showOnExternalDisplays: Bool {
+        didSet { UserDefaults.standard.set(showOnExternalDisplays, forKey: Self.externalKey) }
+    }
+
+    private static let externalKey = "showOnExternalDisplays"
+
     private let engines: [UsageProvider] = [
         CodexProvider(),
         OpenCodeGoProvider(),
@@ -41,6 +49,8 @@ final class AppStore {
     private var forcedState = false
 
     init() {
+        showOnExternalDisplays = UserDefaults.standard.bool(forKey: Self.externalKey)
+
         // Test hook: NOTCHSTATS_STATE=collapsed|peek|expanded forces the initial state.
         switch ProcessInfo.processInfo.environment["NOTCHSTATS_STATE"] {
         case "peek": state = .peek; forcedState = true

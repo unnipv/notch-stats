@@ -72,6 +72,28 @@ Builds are unsigned, so the installer strips the Gatekeeper quarantine flag for
 you. If you download it by hand and macOS complains, run
 `xattr -dr com.apple.quarantine /Applications/NotchStats.app`.
 
+## Running it
+
+NotchStats lives in the menu bar (there is no Dock icon and no window).
+
+| | |
+| --- | --- |
+| **Start** | `open -a NotchStats` — or launch it from Finder/Spotlight, or enable **Launch at Login** in the menu |
+| **Stop** | Menu bar gauge icon → **Quit NotchStats** — or `pkill -f NotchStats` / `osascript -e 'quit app "NotchStats"'` |
+| **Is it running?** | `pgrep -f NotchStats` (no output means it's stopped) |
+| **Restart** | Quit, then `open -a NotchStats` |
+| **Uninstall** | Quit, delete `/Applications/NotchStats.app`, and remove `~/Library/Preferences/dev.notchstats.app.plist` |
+
+**Menu**
+
+- **Refresh Now** (⌘R) — re-query the usage endpoints immediately.
+- **Show on External Displays** — off by default. When off, the island only
+  appears on the built-in notched display; when on, displays without a notch get
+  a floating pill. It floats above the menu bar, so leave it off if it covers
+  other windows.
+- **Launch at Login** — start automatically when you log in.
+- **Quit NotchStats** (⌘Q).
+
 ## How it works
 
 NotchStats reads data your tools already keep and calls the providers' own

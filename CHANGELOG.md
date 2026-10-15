@@ -8,6 +8,8 @@ Initial release.
   everywhere else.
 - Usage is expressed as **remaining** budget (ring + percentage), so an empty
   ring reads as "almost out" rather than a full ring labelled 100%.
+- External displays get no island by default; enable **Show on External
+  Displays** in the menu bar for a floating pill on non-notched screens.
 - Collapsed, peek (hover) and expanded (click) states.
 - Usage providers: Codex / ChatGPT (5h + weekly), OpenCode Go (rolling, weekly,
   monthly) and OpenRouter credit.

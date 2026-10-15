@@ -113,12 +113,25 @@ final class IslandWindowController {
         islands.forEach { $0.show() }
     }
 
+    /// Re-reads the display configuration. Call after changing display
+    /// preferences.
+    func refreshDisplays() {
+        rebuild()
+    }
+
     @objc private func screenParametersChanged() {
         rebuild()
     }
 
     private func rebuild() {
-        let geometries = IslandGeometry.all()
+        let all = IslandGeometry.all()
+        let notched = all.filter(\.hasNotch)
+
+        // Prefer notched displays only. External pill windows float above the
+        // menu bar and can sit over other apps, so they are opt-in — but if no
+        // display has a notch we still show something rather than nothing.
+        let geometries = (store.showOnExternalDisplays || notched.isEmpty) ? all : notched
+
         store.updateGeometries(geometries)
 
         // Tear down and rebuild: display configuration changes are rare, and
