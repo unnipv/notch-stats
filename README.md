@@ -70,6 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/unnipv/notch-stats/main/scripts/ins
 
 ```sh
 brew tap unnipv/notch-stats
+brew trust unnipv/notch-stats        # Homebrew requires trusting third-party taps
 brew install --cask notch-stats
 ```
 
