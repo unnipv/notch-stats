@@ -16,22 +16,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func dumpGeometryIfRequested() {
         guard ProcessInfo.processInfo.environment["NOTCHSTATS_DUMP"] != nil else { return }
-        let g = store.geo
-        FileHandle.standardError.write(Data("""
-        [geometry]
-          screen.frame        = \(g.screen.frame)
-          screen.visibleFrame = \(g.screen.visibleFrame)
-          safeAreaInsets.top  = \(g.screen.safeAreaInsets.top)
-          auxiliaryTopLeft    = \(String(describing: g.screen.auxiliaryTopLeftArea))
-          auxiliaryTopRight   = \(String(describing: g.screen.auxiliaryTopRightArea))
-          notchWidth          = \(g.notchWidth)
-          notchHeight         = \(g.notchHeight)
-          barHeight           = \(g.barHeight)
-          menuBarHeight       = \(g.menuBarHeight)
-          hasNotch            = \(g.hasNotch)
-          island(collapsed)   = \(store.islandSize)
+        for g in store.geometries {
+            FileHandle.standardError.write(Data("""
+            [geometry] \(g.screen.localizedName) style=\(g.hasNotch ? "notch" : "pill")
+              screen.frame        = \(g.screen.frame)
+              screen.visibleFrame = \(g.screen.visibleFrame)
+              safeAreaInsets.top  = \(g.screen.safeAreaInsets.top)
+              auxiliaryTopLeft    = \(String(describing: g.screen.auxiliaryTopLeftArea))
+              auxiliaryTopRight   = \(String(describing: g.screen.auxiliaryTopRightArea))
+              notchWidth          = \(g.notchWidth)
+              barHeight           = \(g.barHeight)
+              menuBarHeight       = \(g.menuBarHeight)
+              island(collapsed)   = \(store.islandSize(for: g))
 
-        """.utf8))
+            """.utf8))
+        }
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }

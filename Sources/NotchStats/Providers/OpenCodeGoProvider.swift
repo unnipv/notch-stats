@@ -54,8 +54,13 @@ struct OpenCodeGoProvider: UsageProvider {
                                percent: percent, resetsAt: isoDate(dict["resetsAt"] as? String))
         }
 
+        let rateLimited = windowLabels.contains { entry in
+            (usage[entry.key] as? [String: Any])?["status"] as? String == "rate-limited"
+        }
+
         return ProviderUsage(id: id, name: name, accentHex: accent, order: order,
-                             windows: windows, note: nil,
+                             windows: windows,
+                             note: rateLimited ? "Rate limited" : nil,
                              error: windows.isEmpty ? "No data" : nil)
     }
 

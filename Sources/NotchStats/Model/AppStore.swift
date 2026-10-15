@@ -18,9 +18,14 @@ final class AppStore {
 
     var state: IslandState = .collapsed
     var page: Page = .usage
-    var geo: NotchGeometry = .current()
+    var geometries: [IslandGeometry] = IslandGeometry.all()
     var providers: [ProviderUsage] = []
-    var sessions: [AgentSession] = []
+    var sessions: [AgentSession] = [] {
+        didSet { liveAgents = Set(sessions.filter { $0.isLive() }.map(\.agent)) }
+    }
+    /// Agents with a session that is currently working. Stored, not computed —
+    /// deriving it during a render pass re-invalidates the view every frame.
+    private(set) var liveAgents: Set<AgentKind> = []
     var refreshing = false
     var lastRefresh: Date?
 
@@ -35,9 +40,6 @@ final class AppStore {
     private var hoverTask: Task<Void, Never>?
     private var forcedState = false
 
-    /// Width of the black "ear" that extends past the physical notch.
-    let earWidth: CGFloat = 70
-
     init() {
         // Test hook: NOTCHSTATS_STATE=collapsed|peek|expanded forces the initial state.
         switch ProcessInfo.processInfo.environment["NOTCHSTATS_STATE"] {
@@ -49,15 +51,17 @@ final class AppStore {
         if ProcessInfo.processInfo.environment["NOTCHSTATS_PAGE"] == "activity" { page = .activity }
     }
 
-    var islandSize: CGSize {
+    /// Size the island occupies on a given display.
+    func islandSize(for geometry: IslandGeometry) -> CGSize {
         switch state {
         case .collapsed:
-            return CGSize(width: geo.notchWidth + earWidth * 2, height: geo.barHeight)
+            return CGSize(width: geometry.collapsedWidth, height: geometry.barHeight)
         case .peek:
-            return CGSize(width: geo.notchWidth + 210, height: geo.barHeight)
+            return CGSize(width: geometry.collapsedWidth + (geometry.hasNotch ? 70 : 84),
+                          height: geometry.barHeight)
         case .expanded:
-            let width = min(geo.screen.frame.width - 120, 560)
-            return CGSize(width: width, height: geo.barHeight + 318)
+            let width = min(geometry.screen.frame.width - 120, 560)
+            return CGSize(width: width, height: geometry.barHeight + 318)
         }
     }
 
@@ -65,8 +69,8 @@ final class AppStore {
         providers.first { $0.id == id }
     }
 
-    func updateGeometry(_ geometry: NotchGeometry) {
-        geo = geometry
+    func updateGeometries(_ geometries: [IslandGeometry]) {
+        self.geometries = geometries
     }
 
     // MARK: - Lifecycle
@@ -76,7 +80,6 @@ final class AppStore {
             Task { @MainActor in self?.sessions = list }
         }
         sessionMonitor.start()
-
         Task { @MainActor in
             await refresh()
             while !Task.isCancelled {
@@ -85,11 +88,6 @@ final class AppStore {
                 await refresh()
             }
         }
-    }
-
-    /// Agents with a session that is currently working.
-    var liveAgents: Set<AgentKind> {
-        Set(sessions.filter { $0.isLive() }.map(\.agent))
     }
 
     func isAgentLive(_ kind: AgentKind) -> Bool {

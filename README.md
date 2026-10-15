@@ -88,11 +88,15 @@ you how to refresh it.
 
 ## Performance
 
-Designed to be invisible:
+Designed to be invisible. Measured on a MacBook Air M2 with a notched built-in
+display plus a 1440p external monitor (two island windows):
 
-- Event-free idle: no polling loops for the UI, sessions refresh every 2.5s with a
-  handful of indexed SQLite reads, usage refreshes every ~60s.
-- Countdowns are computed from `Date` rather than ticked.
+- **~0.5% CPU idle, ~21 MB physical footprint.**
+- Sessions refresh every 2.5s with a handful of indexed SQLite reads; usage
+  refreshes every ~60s with jitter.
+- Countdowns are computed from `Date` rather than ticked, and nothing animates
+  on a loop — a repeating animation would keep the window's display link active
+  and stop the app ever idling.
 - No cost engine, no chart library, no updater, no background subprocesses.
 
 ## Development
@@ -111,6 +115,7 @@ NOTCHSTATS_STATE=collapsed|peek|expanded
 NOTCHSTATS_PAGE=activity
 NOTCHSTATS_DEBUG_BG=1     # tint the island so its bounds are visible in screenshots
 NOTCHSTATS_DUMP=1         # print notch geometry to stderr
+scripts/cpu.sh <pid> 10   # true CPU usage over a window
 ```
 
 ## Releasing

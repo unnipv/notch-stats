@@ -63,11 +63,26 @@ final class ParsingTests: XCTestCase {
         let usage = OpenCodeGoProvider.parse(Data(json.utf8))
 
         XCTAssertNil(usage.error)
+        XCTAssertNil(usage.note)
         XCTAssertEqual(usage.windows.map(\.label), ["5h", "Weekly", "Monthly"])
         XCTAssertEqual(usage.windows[0].percent, 0.00, accuracy: 0.0001)
         XCTAssertEqual(usage.windows[1].percent, 0.22, accuracy: 0.0001)
         XCTAssertEqual(usage.windows[2].percent, 0.68, accuracy: 0.0001)
         XCTAssertNotNil(usage.windows[0].resetsAt, "fractional-second ISO-8601 should parse")
+    }
+
+    func testOpenCodeGoFlagsRateLimited() {
+        let json = """
+        {
+          "usage": {
+            "rolling": { "status": "rate-limited", "percent": 100, "resetsAt": "2026-10-15T17:49:33.000Z" },
+            "weekly":  { "status": "ok", "percent": 62, "resetsAt": "2026-10-19T00:00:00.000Z" }
+          }
+        }
+        """
+        let usage = OpenCodeGoProvider.parse(Data(json.utf8))
+        XCTAssertEqual(usage.note, "Rate limited")
+        XCTAssertEqual(usage.windows.first?.percent, 1.0)
     }
 
     func testOpenCodeGoRejectsGarbage() {
