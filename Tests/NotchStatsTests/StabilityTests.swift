@@ -224,3 +224,63 @@ final class StabilityTests: XCTestCase {
         XCTAssertEqual(OpenCodeGoProvider.response(status: 429, data: Data()).issue, .rateLimited)
     }
 }
+
+// MARK: - Regression: "the Claude login keeps disappearing"
+
+/// A transient keychain failure must never look like a missing login, and a
+/// genuinely absent login must still say so.
+final class LoginDisappearingRegressionTests: XCTestCase {
+
+    private func lastReading() -> ProviderUsage {
+        ProviderUsage(id: "claude", name: "Claude", accentHex: "#D97757", order: 1,
+                      windows: [UsageWindow(id: "5h", label: "5h", percent: 0.14, resetsAt: nil)],
+                      note: "Max", error: nil)
+    }
+
+    /// Resolution outcomes → provider result → what the panel shows next to the
+    /// previous good reading, i.e. the whole path the user actually sees.
+    private func shown(outcomes: [ClaudeCredentials.Outcome]) -> ProviderUsage? {
+        let failure = ClaudeCredentials.failure(from: outcomes)
+        return ProviderUsage.merge(ClaudeProvider.failure(failure), previous: lastReading())
+    }
+
+    func testTransientKeychainFailureKeepsTheLastReadingDimmed() {
+        for outcomes in [[ClaudeCredentials.Outcome.timedOut, .notFound],
+                         [.denied, .notFound],
+                         [.timedOut, .denied]] {
+            let usage = shown(outcomes: outcomes)
+            XCTAssertEqual(usage?.isStale, true, "\(outcomes) must show the last reading, dimmed")
+            XCTAssertEqual(usage?.windows.count, 1)
+            XCTAssertNil(usage?.error, "\(outcomes) must not become an error row")
+            XCTAssertNotEqual(usage?.issue, .notSignedIn)
+        }
+    }
+
+    func testTransientKeychainFailureWithNoHistoryNamesTheKeychainNotTheLogin() {
+        for outcomes in [[ClaudeCredentials.Outcome.timedOut], [.denied]] {
+            let failure = ClaudeCredentials.failure(from: outcomes)
+            let usage = ProviderUsage.merge(ClaudeProvider.failure(failure), previous: nil)
+            XCTAssertEqual(usage?.issue, .keychainDenied)
+            XCTAssertFalse(usage?.error?.lowercased().contains("not signed in") ?? true)
+            XCTAssertNotNil(usage?.hint)
+        }
+    }
+
+    func testARealAbsenceStillSaysNotSignedIn() {
+        // Every source answered "not found": that is a real absence, and it
+        // replaces the old reading instead of dimming it.
+        let usage = shown(outcomes: [.notFound, .notFound])
+        XCTAssertEqual(usage?.issue, .notSignedIn)
+        XCTAssertEqual(usage?.error, "Not signed in to Claude")
+        XCTAssertEqual(usage?.hint, "Run `claude` to sign in")
+        XCTAssertTrue(usage?.windows.isEmpty ?? false)
+        XCTAssertEqual(usage?.isStale, false)
+    }
+
+    func testAFailedReadIsNotRememberedLongEnoughToHideAGoodLogin() {
+        // Together with the 10 s cap on cached failures: by the next refresh
+        // tick (60 s) the keychain is read again.
+        let failed = ClaudeCredentials.Resolution.missing(.keychainTimedOut)
+        XCTAssertFalse(ClaudeCredentials.CachePolicy.isFresh(failed, age: 60))
+    }
+}
