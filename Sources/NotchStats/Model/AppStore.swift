@@ -168,13 +168,20 @@ final class AppStore {
         }
 
         let now = Date()
+        // Background ticks stagger their requests; the first load and manual
+        // refreshes go out together so the user isn't kept waiting.
+        let spread = !force && lastRefresh != nil
         let due = engines.filter { backoffs[$0.id]?.allows(now: now) ?? true }
 
         let results = await withTaskGroup(of: (String, ProviderUsage?).self) { group -> [String: ProviderUsage?] in
-            for engine in due {
+            for (position, engine) in due.enumerated() {
+                // Spread the requests out: five simultaneous TLS handshakes are
+                // a visible one-second CPU spike, and nothing here is urgent.
+                let delay = spread ? UInt64(position) * 1_000_000_000 : 0
                 // Fence each provider so one that blocks (a keychain prompt, a
                 // stalled connection) can never hold up the others.
                 group.addTask {
+                    if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
                     let usage = await withTimeout(seconds: 20, fallback: engine.timedOut() as ProviderUsage?) {
                         await engine.fetch()
                     }
