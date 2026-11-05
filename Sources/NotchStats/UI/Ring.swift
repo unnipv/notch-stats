@@ -23,7 +23,7 @@ struct Ring: View {
             // Inset by half the stroke so the ring stays inside its frame.
             Circle()
                 .inset(by: lineWidth / 2)
-                .stroke(color.opacity(0.18), lineWidth: lineWidth)
+                .stroke(color.opacity(0.28), lineWidth: lineWidth)
 
             Circle()
                 .inset(by: lineWidth / 2)

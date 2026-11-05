@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **The Claude login no longer "disappears".** A failed keychain read used to be
+  cached as "no credentials" for five minutes; failures are now remembered for
+  10 seconds, an expired token is never served from cache, and wake-from-sleep
+  re-reads the credential. Failures are told apart — not signed in, keychain
+  denied or not responding, token expired, token rejected, endpoint unreachable,
+  rate limited — each with its own caption and recovery hint. Credentials stay
+  strictly read-only.
+- **More resilient providers.** Transient failures keep the last reading
+  (dimmed, marked "Last reading"), network failures and rate limits back off
+  per provider, a half-written `~/.codex/auth.json` is retried, and a busy
+  OpenCode database never drops a row. A `security` lookup that hangs is killed
+  instead of leaking a thread and a process.
+- **Lighter.** Idle CPU dropped from 0.6–0.8% to 0.1–0.2% (same method, same
+  machine): Anthropic spend is accumulated incrementally, OpenCode sessions are
+  re-read only when the database changes, unchanged Codex transcripts cost one
+  `stat`, the session poll slows down when idle, and provider requests are
+  staggered instead of fired together.
+- **New look.** Glass panel, rows that lead with the remaining share, a
+  dedicated figure for dollar spend, designed empty and error states, a
+  collapsed bar with matching rings on both ears, Reduce Motion support and
+  VoiceOver labels. The looping symbol pulse and refresh spinner are gone.
+
 - **Anthropic API spend.** When OpenCode holds a pay-as-you-go Anthropic API
   key, NotchStats adds an **Anthropic API** row with month-to-date and today's
   spend, summed from the `cost` OpenCode records on each Anthropic assistant

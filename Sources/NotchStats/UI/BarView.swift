@@ -44,7 +44,7 @@ struct BarView: View {
                 // The peek island is 70 pt wider; each ear gets half of it.
                 let ear = geometry.earWidth + (detailed ? 35 : 0)
                 HStack(spacing: 0) {
-                    EarStack(entries: codex.map { [$0] } ?? [], side: .left, detailed: detailed)
+                    LeftEar(entry: codex, detailed: detailed)
                         .frame(width: ear, alignment: .leading)
                     Spacer(minLength: 0)
                     EarStack(entries: others, side: .right, detailed: detailed)
@@ -65,6 +65,34 @@ struct BarView: View {
     }
 }
 
+/// Codex owns the left ear. It shows its 5-hour and weekly windows as two
+/// rows built exactly like the right ear's, so both ears carry the same weight
+/// and the same ring size and stroke.
+private struct LeftEar: View {
+    let entry: BarEntry?
+    let detailed: Bool
+
+    var body: some View {
+        if let entry {
+            let windows = Array(entry.provider.windows.prefix(2))
+            if windows.count == 2 {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(windows) { window in
+                        CompactEarRow(entry: entry, window: window, side: .left, detailed: detailed)
+                    }
+                }
+                .padding(.horizontal, Theme.Space.m)
+            } else {
+                CompactEarRow(entry: entry, window: windows.first, side: .left, detailed: detailed)
+                    .padding(.horizontal, Theme.Space.m)
+            }
+        } else {
+            Circle().fill(Color.white.opacity(0.18)).frame(width: 6, height: 6)
+                .padding(.horizontal, Theme.Space.m)
+        }
+    }
+}
+
 /// An ear holding one or more indicators. Two providers stack vertically so
 /// the island can stay notch-wide.
 private struct EarStack: View {
@@ -78,7 +106,8 @@ private struct EarStack: View {
                 .fill(Color.white.opacity(0.18))
                 .frame(width: 6, height: 6)
         } else if entries.count == 1, let entry = entries.first {
-            Ear(entry: entry, side: side, detailed: detailed)
+            CompactEarRow(entry: entry, side: side, detailed: detailed)
+                .padding(.horizontal, Theme.Space.m)
         } else {
             VStack(alignment: side == .left ? .leading : .trailing, spacing: 2) {
                 ForEach(entries) { entry in
@@ -103,8 +132,8 @@ private struct BarReading {
     /// A reading that is current and from an agent that is working is the
     /// brightest thing in the bar.
     var numberStyle: Color {
-        if provider.isStale { return .white.opacity(0.5) }
-        return entry.live ? .white : .white.opacity(0.78)
+        if provider.isStale { return .white.opacity(0.62) }
+        return entry.live ? .white : .white.opacity(0.9)
     }
 
     var accessibilityLabel: String {
@@ -130,7 +159,7 @@ private struct Warning: View {
             if showsText, let issue {
                 Text(issue.shortLabel)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.78))
+                    .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(1)
                     .fixedSize()
             }
@@ -140,16 +169,31 @@ private struct Warning: View {
 
 private struct CompactEarRow: View {
     let entry: BarEntry
+    var window: UsageWindow?
     let side: EarSide
     let detailed: Bool
+
+    init(entry: BarEntry, window: UsageWindow? = nil, side: EarSide, detailed: Bool) {
+        self.entry = entry
+        self.window = window ?? entry.provider.headline
+        self.side = side
+        self.detailed = detailed
+    }
+
+    /// One ring size and one stroke for every indicator in the bar.
+    static func ring(detailed: Bool) -> (size: CGFloat, line: CGFloat) {
+        detailed ? (14, 2.5) : (12, 2.5)
+    }
 
     var body: some View {
         let reading = BarReading(entry: entry)
         Group {
-            if let window = reading.window {
-                let ring = Ring(progress: window.remaining, color: reading.tint,
-                                size: detailed ? 14 : 11,
-                                lineWidth: detailed ? 2.5 : 2, live: entry.live)
+            if let window {
+                let metrics = Self.ring(detailed: detailed)
+                let tint = Theme.urgency(window.percent, base: Color(hex: entry.provider.accentHex))
+                let ring = Ring(progress: window.remaining, color: tint,
+                                size: metrics.size, lineWidth: metrics.line,
+                                live: entry.live && window.id == entry.provider.headline?.id)
                 let label = Text(Format.percent(window.remaining))
                     .font(.system(size: detailed ? 12 : 11, weight: .semibold))
                     .monospacedDigit()
@@ -157,8 +201,22 @@ private struct CompactEarRow: View {
                     .lineLimit(1)
                     .fixedSize()
                     .numericFlip(window.remaining)
+                // The peek adds when the window resets, in the same row.
+                let reset = detailed ? Format.countdown(to: window.resetsAt) : nil
+                let resetLabel = Text(reset ?? "")
+                    .font(.system(size: 10))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(1)
+                    .fixedSize()
                 HStack(spacing: Theme.Space.xs) {
-                    if side == .left { ring; label } else { label; ring }
+                    if side == .left {
+                        ring; label
+                        if reset != nil { resetLabel }
+                    } else {
+                        if reset != nil { resetLabel }
+                        label; ring
+                    }
                 }
             } else {
                 Warning(issue: reading.provider.issue, size: detailed ? 11 : 10, showsText: detailed)
@@ -168,7 +226,8 @@ private struct CompactEarRow: View {
         // of the text can't push the stack past the notch.
         .frame(height: detailed ? 14 : 13)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(reading.accessibilityLabel)
+        .accessibilityLabel(window.map { "\(entry.provider.name) \($0.label): \(Format.percent($0.remaining)) left" }
+                            ?? reading.accessibilityLabel)
     }
 }
 

@@ -187,13 +187,19 @@ NotchStats shows an explicit error caption rather than a wrong number.
 Designed to be invisible. Measured on a MacBook Air M2 with a notched built-in
 display:
 
-- **~0.5% CPU idle, ~22 MB physical footprint.**
-- Sessions refresh every 2.5s with a handful of indexed SQLite reads; usage
-  refreshes every ~60s with jitter.
+- **~0.1–0.2% CPU idle, ~21 MB physical footprint** (60 s `scripts/cpu.sh`
+  windows and `vmmap`, release build, notched M-series display; 4–5 threads, no
+  child processes after 10 minutes). The same method measured 0.6–0.8% before
+  the performance pass.
+- Sessions refresh every 2.5s while something is working or the panel is open
+  and every 6s otherwise, and only re-read a database when it has changed;
+  usage refreshes every ~60s with jitter, staggered across providers.
 - Countdowns are computed from `Date` rather than ticked, and nothing animates
   on a loop — a repeating animation would keep the window's display link active
   and stop the app ever idling.
-- No cost engine, no chart library, no updater, no background subprocesses.
+- No cost engine, no chart library, no updater. The only subprocess is a
+  short-lived, time-limited `security` lookup of the Claude login, at most once
+  every few minutes.
 
 ## How it compares
 
@@ -202,7 +208,7 @@ subprocesses. That trade buys and costs:
 
 **Where it wins**
 
-- **Light.** ~0.5% CPU / ~22 MB, versus the cost-engine, chart-library and
+- **Light.** ~0.2% CPU / ~21 MB, versus the cost-engine, chart-library and
   auto-updater stacks many notch apps carry.
 - **Zero-config.** No hooks installed into your agent configs, no bridge binary,
   no socket, no API keys to paste. It reads what your CLIs already wrote.
