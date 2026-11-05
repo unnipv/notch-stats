@@ -36,14 +36,56 @@ struct CodexSessionReader {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
 
-    /// Current session state, or nil when there is no recent transcript.
-    static func current(now: Date = Date()) -> AgentSession? {
-        guard let url = newestRollout(now: now) else { return nil }
-        return parse(url: url)
+    /// What a transcript says, independent of the clock.
+    struct Scan: Equatable {
+        var meta: (title: String, cwd: String, model: String?)
+        var taskRunning: Bool?
+        var detail: SessionState
+        var updatedAt: Date
+        var size: UInt64
+
+        static func == (lhs: Scan, rhs: Scan) -> Bool {
+            lhs.meta == rhs.meta && lhs.taskRunning == rhs.taskRunning && lhs.detail == rhs.detail
+                && lhs.updatedAt == rhs.updatedAt && lhs.size == rhs.size
+        }
     }
 
-    static func parse(url: URL, now: Date = Date()) -> AgentSession? {
-        let updatedAt = modification(url)
+    /// Remembers the last parse so an unchanged transcript costs one `stat`,
+    /// not a 128 KB read plus a JSON decode per line.
+    final class Cache: @unchecked Sendable {
+        fileprivate var url: URL?
+        fileprivate var scan: Scan?
+        fileprivate(set) var parses = 0
+        init() {}
+    }
+
+    /// Current session state, or nil when there is no recent transcript.
+    static func current(now: Date = Date(), cache: Cache? = nil) -> AgentSession? {
+        guard let url = newestRollout(now: now) else { return nil }
+        return parse(url: url, now: now, cache: cache)
+    }
+
+    static func parse(url: URL, now: Date = Date(), cache: Cache? = nil) -> AgentSession? {
+        // URL objects memoise resource values; always stat the file itself.
+        var url = url
+        url.removeAllCachedResourceValues()
+        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let updatedAt = values?.contentModificationDate ?? .distantPast
+        let size = UInt64(values?.fileSize ?? 0)
+
+        let scan: Scan
+        if let cache, cache.url == url, let cached = cache.scan,
+           cached.updatedAt == updatedAt, cached.size == size {
+            scan = cached
+        } else {
+            guard let fresh = self.scan(url: url, updatedAt: updatedAt, size: size) else { return nil }
+            scan = fresh
+            if let cache { cache.url = url; cache.scan = fresh; cache.parses += 1 }
+        }
+        return session(from: scan, id: url.deletingPathExtension().lastPathComponent, now: now)
+    }
+
+    static func scan(url: URL, updatedAt: Date, size: UInt64) -> Scan? {
         let meta = readHead(url)
         guard let lines = readTail(url) else { return nil }
 
@@ -73,20 +115,23 @@ struct CodexSessionReader {
                 break
             }
         }
+        return Scan(meta: meta, taskRunning: taskRunning, detail: detail, updatedAt: updatedAt, size: size)
+    }
 
+    static func session(from scan: Scan, id: String, now: Date) -> AgentSession {
         let state: SessionState
-        if taskRunning == true { state = detail }
-        else if taskRunning == false { state = .done }
-        else { state = updatedAt.timeIntervalSince(now) > -300 ? .thinking : .done }
+        if scan.taskRunning == true { state = scan.detail }
+        else if scan.taskRunning == false { state = .done }
+        else { state = scan.updatedAt.timeIntervalSince(now) > -300 ? .thinking : .done }
 
         return AgentSession(
-            id: url.deletingPathExtension().lastPathComponent,
+            id: id,
             agent: .codex,
-            title: meta.title,
-            project: projectName(meta.cwd),
+            title: scan.meta.title,
+            project: projectName(scan.meta.cwd),
             state: state,
-            model: meta.model,
-            updatedAt: updatedAt
+            model: scan.meta.model,
+            updatedAt: scan.updatedAt
         )
     }
 

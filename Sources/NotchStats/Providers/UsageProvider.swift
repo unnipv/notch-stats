@@ -16,6 +16,6 @@ extension UsageProvider {
     /// Placeholder shown when a provider exceeds its time budget.
     func timedOut() -> ProviderUsage {
         .failure(id: id, name: name, accentHex: accentHex, order: order,
-                 message: "Timed out — will retry")
+                 message: "Timed out", hint: "Retrying shortly", issue: .unreachable)
     }
 }

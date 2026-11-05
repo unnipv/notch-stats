@@ -11,19 +11,56 @@ enum OpenCodeDB {
         NSHomeDirectory() + "/.local/share/opencode/opencode.db"
     }
 
-    /// Returns true when OpenCode holds an Anthropic **API key** (not an OAuth
-    /// login, which belongs to a Claude subscription and isn't billed per use).
-    static func hasAnthropicAPIKey(path: String = OpenCodeDB.databasePath) -> Bool {
-        guard let credential = credentialJSON(integrationIDs: ["anthropic"], path: path) else {
-            return false
+    /// Outcome of a credential read. `unavailable` means the database exists
+    /// but could not be read right now (busy, mid-checkpoint) — callers must not
+    /// treat that as "no credential".
+    enum Lookup {
+        case found([String: Any])
+        case none
+        case unavailable
+    }
+
+    /// How long a read waits for a writer before giving up. OpenCode holds
+    /// short WAL write locks while it works.
+    static let busyTimeoutMS: Int32 = 400
+
+    /// Opens read-only with a busy handler. Returns nil if the file can't be opened.
+    static func openReadOnly(_ path: String) -> OpaquePointer? {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2("file:\(path)?mode=ro", &db,
+                              SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK else {
+            sqlite3_close(db)
+            return nil
         }
-        // OAuth credentials carry `access`/`refresh`; API keys carry `key`.
-        if (credential["type"] as? String) == "oauth" { return false }
-        let key = ((credential["key"] as? String) ?? (credential["access"] as? String) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        // A few versions stored user OAuth tokens under `key`.
-        if key.contains("-oat") { return false }
-        return !key.isEmpty
+        sqlite3_busy_timeout(db, busyTimeoutMS)
+        return db
+    }
+
+    enum AnthropicKeyState: Equatable {
+        case apiKey
+        case none
+        case unavailable
+    }
+
+    /// Whether OpenCode holds an Anthropic **API key** (not an OAuth login,
+    /// which belongs to a Claude subscription and isn't billed per use).
+    static func anthropicKeyState(path: String = OpenCodeDB.databasePath) -> AnthropicKeyState {
+        switch lookupCredential(integrationIDs: ["anthropic"], path: path) {
+        case .unavailable: return .unavailable
+        case .none: return .none
+        case let .found(credential):
+            // OAuth credentials carry `access`/`refresh`; API keys carry `key`.
+            if (credential["type"] as? String) == "oauth" { return .none }
+            let key = ((credential["key"] as? String) ?? (credential["access"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // A few versions stored user OAuth tokens under `key`.
+            if key.contains("-oat") || key.isEmpty { return .none }
+            return .apiKey
+        }
+    }
+
+    static func hasAnthropicAPIKey(path: String = OpenCodeDB.databasePath) -> Bool {
+        anthropicKeyState(path: path) == .apiKey
     }
 
     /// Spend attributed to Anthropic API models, as recorded by OpenCode.
@@ -52,12 +89,7 @@ enum OpenCodeDB {
         let monthStartMS = Int64(monthStart.timeIntervalSince1970 * 1000)
         let dayStartMS = Int64(dayStart.timeIntervalSince1970 * 1000)
 
-        var db: OpaquePointer?
-        let uri = "file:\(path)?mode=ro"
-        guard sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK else {
-            sqlite3_close(db)
-            return nil
-        }
+        guard let db = openReadOnly(path) else { return nil }
         defer { sqlite3_close(db) }
 
         // Restrict to this month before touching JSON so the time index does the
@@ -93,15 +125,14 @@ enum OpenCodeDB {
     /// Returns the parsed JSON credential for the first matching integration
     /// (`integration_id`), most recently updated first.
     static func credentialJSON(integrationIDs: [String], path: String = OpenCodeDB.databasePath) -> [String: Any]? {
-        guard !integrationIDs.isEmpty,
-              FileManager.default.fileExists(atPath: path) else { return nil }
+        if case let .found(json) = lookupCredential(integrationIDs: integrationIDs, path: path) { return json }
+        return nil
+    }
 
-        var db: OpaquePointer?
-        let uri = "file:\(path)?mode=ro"
-        guard sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK else {
-            sqlite3_close(db)
-            return nil
-        }
+    static func lookupCredential(integrationIDs: [String], path: String = OpenCodeDB.databasePath) -> Lookup {
+        guard !integrationIDs.isEmpty,
+              FileManager.default.fileExists(atPath: path) else { return .none }
+        guard let db = openReadOnly(path) else { return .unavailable }
         defer { sqlite3_close(db) }
 
         // Prefer earlier entries in `integrationIDs` (e.g. "opencode-go" over the
@@ -118,7 +149,7 @@ enum OpenCodeDB {
         """
 
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return .unavailable }
         defer { sqlite3_finalize(stmt) }
 
         var bind: Int32 = 1
@@ -129,16 +160,18 @@ enum OpenCodeDB {
             sqlite3_bind_text(stmt, bind, id, -1, SQLITE_TRANSIENT); bind += 1
         }
 
-        guard sqlite3_step(stmt) == SQLITE_ROW, let cString = sqlite3_column_text(stmt, 0) else {
-            return nil
+        switch sqlite3_step(stmt) {
+        case SQLITE_ROW:
+            guard let cString = sqlite3_column_text(stmt, 0) else { return .none }
+            let raw = String(cString: cString)
+            if let object = jsonObject(raw) { return .found(object) }
+            return .found(["key": raw])
+        case SQLITE_DONE:
+            return .none
+        default:
+            // SQLITE_BUSY / SQLITE_LOCKED after the busy timeout: try later.
+            return .unavailable
         }
-        let raw = String(cString: cString)
-
-        if let data = raw.data(using: .utf8),
-           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            return object
-        }
-        return ["key": raw]
     }
 }
 

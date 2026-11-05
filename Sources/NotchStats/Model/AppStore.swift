@@ -16,15 +16,19 @@ final class AppStore {
         case activity
     }
 
-    var state: IslandState = .collapsed
+    var state: IslandState = .collapsed {
+        didSet {
+            guard state != oldValue else { return }
+            sessionMonitor.setWatching(state == .expanded)
+        }
+    }
     var page: Page = .usage
     var geometries: [IslandGeometry] = IslandGeometry.all()
     var providers: [ProviderUsage] = []
-    var sessions: [AgentSession] = [] {
-        didSet { liveAgents = Set(sessions.filter { $0.isLive() }.map(\.agent)) }
-    }
+    private(set) var sessions: [AgentSession] = []
     /// Agents with a session that is currently working. Stored, not computed —
-    /// deriving it during a render pass re-invalidates the view every frame.
+    /// deriving it during a render pass re-invalidates the view every frame —
+    /// and only assigned when it changes, so observers aren't woken for nothing.
     private(set) var liveAgents: Set<AgentKind> = []
     var refreshing = false
     var lastRefresh: Date?
@@ -46,6 +50,8 @@ final class AppStore {
     ]
 
     private let sessionMonitor = SessionMonitor()
+    private var backoffs: [String: Backoff] = [:]
+    private var wakeObservers: [NSObjectProtocol] = []
 
     private var hoverTask: Task<Void, Never>?
     private var forcedState = false
@@ -101,9 +107,10 @@ final class AppStore {
         }
 
         sessionMonitor.onChange = { [weak self] list in
-            Task { @MainActor in self?.sessions = list }
+            Task { @MainActor in self?.apply(sessions: list) }
         }
         sessionMonitor.start()
+        observeWake()
         Task { @MainActor in
             await refresh()
             while !Task.isCancelled {
@@ -114,39 +121,87 @@ final class AppStore {
         }
     }
 
+    func apply(sessions list: [AgentSession]) {
+        if list != sessions { sessions = list }
+        let live = Set(list.filter { $0.isLive() }.map(\.agent))
+        if live != liveAgents { liveAgents = live }
+    }
+
+    /// After sleep the network is usually not back yet and the cached keychain
+    /// read may be stale, so forget it and look again once things settle.
+    private func observeWake() {
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            wakeObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    ClaudeCredentials.invalidate()
+                    self.backoffs = [:]
+                    self.sessionMonitor.refresh()
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    await self.refresh()
+                }
+            })
+        }
+    }
+
     func isAgentLive(_ kind: AgentKind) -> Bool {
         liveAgents.contains(kind)
     }
 
+    /// Manual refresh: clears cached credentials and backoff first.
     func refreshNow() {
-        Task { await refresh() }
+        Task { await refresh(force: true) }
     }
 
-    func refresh() async {
+    func refresh(force: Bool = false) async {
         guard !refreshing else { return }
         refreshing = true
+        defer {
+            refreshing = false
+            lastRefresh = Date()
+        }
 
-        let engines = self.engines
-        let results = await withTaskGroup(of: ProviderUsage?.self) { group -> [ProviderUsage] in
-            for engine in engines {
+        if force {
+            ClaudeCredentials.invalidate()
+            backoffs = [:]
+        }
+
+        let now = Date()
+        let due = engines.filter { backoffs[$0.id]?.allows(now: now) ?? true }
+
+        let results = await withTaskGroup(of: (String, ProviderUsage?).self) { group -> [String: ProviderUsage?] in
+            for engine in due {
                 // Fence each provider so one that blocks (a keychain prompt, a
                 // stalled connection) can never hold up the others.
                 group.addTask {
-                    await withTimeout(seconds: 20, fallback: engine.timedOut() as ProviderUsage?) {
+                    let usage = await withTimeout(seconds: 20, fallback: engine.timedOut() as ProviderUsage?) {
                         await engine.fetch()
                     }
+                    return (engine.id, usage)
                 }
             }
-            var collected: [ProviderUsage] = []
-            for await result in group {
-                if let result { collected.append(result) }
-            }
+            var collected: [String: ProviderUsage?] = [:]
+            for await (id, usage) in group { collected[id] = usage }
             return collected
         }
 
-        providers = results.sorted { $0.order < $1.order }
-        refreshing = false
-        lastRefresh = Date()
+        var merged: [ProviderUsage] = []
+        for engine in engines {
+            let previous = provider(engine.id)
+            guard let outcome = results[engine.id] else {
+                // Backing off: keep showing what we have.
+                if let previous { merged.append(previous) }
+                continue
+            }
+            backoffs[engine.id, default: Backoff()].record(outcome, now: now)
+            if let outcome, let kept = ProviderUsage.merge(outcome, previous: previous) {
+                merged.append(kept)
+            }
+        }
+
+        let sorted = merged.sorted { $0.order < $1.order }
+        if sorted != providers { providers = sorted }
     }
 
     // MARK: - Interaction

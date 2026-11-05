@@ -25,15 +25,13 @@ struct ClaudeProvider: UsageProvider {
         let resolution = await ClaudeCredentials.resolveAsync()
 
         guard case let .found(credential, _) = resolution else {
-            if case let .missing(message) = resolution { return Self.failure(message) }
-            return Self.failure("No Claude credentials")
+            if case let .missing(failure) = resolution { return Self.failure(failure) }
+            return Self.failure(.notSignedIn)
         }
 
         // Don't spend a request on an OAuth token we already know is stale.
-        if credential.kind == .oauth,
-           let expiresAt = credential.expiresAt, expiresAt <= Date() {
-            return Self.failure("Token expired — run `claude`")
-        }
+        // Claude Code renews it itself; we re-read on the normal cadence.
+        if credential.isExpired() { return Self.expired() }
 
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
         request.setValue("claude-code/2.1.301", forHTTPHeaderField: "User-Agent")
@@ -48,29 +46,66 @@ struct ClaudeProvider: UsageProvider {
         request.timeoutInterval = 15
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await HTTP.session.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            switch status {
-            case 200:
-                return Self.parse(data)
-            case 400 where Self.isAPIOrganisationError(data):
-                return Self.failure("API key login — usage limits don't apply")
-            case 401:
-                // The credential may have been rotated underneath us.
+            if status == 401 {
+                // The credential may have been rotated underneath us; make the
+                // next attempt read the keychain again.
                 ClaudeCredentials.invalidate()
-                return Self.failure(credential.kind == .oauth
-                                    ? "Auth expired — run `claude`"
-                                    : "API key rejected")
-            case 403:
-                return Self.failure("Token lacks usage scope — run `claude`")
-            case 429:
-                return Self.failure("Rate limited — try again shortly")
-            default:
-                return Self.failure("HTTP \(status)")
             }
+            return Self.response(status: status, data: data, kind: credential.kind)
         } catch {
-            return Self.failure(error.localizedDescription)
+            return Self.transportFailure(error)
         }
+    }
+
+    // MARK: - Failure states (unit-tested)
+
+    /// Nothing usable was found locally.
+    static func failure(_ failure: ClaudeCredentials.Failure) -> ProviderUsage {
+        switch failure {
+        case .notSignedIn:
+            return issue(.notSignedIn, "Not signed in to Claude", "Run `claude` to sign in")
+        case .keychainDenied:
+            return issue(.keychainDenied, "Keychain access denied", "Unlock your login keychain, then refresh")
+        case .keychainTimedOut:
+            return issue(.keychainDenied, "Keychain not responding", "Retrying — unlock your login keychain")
+        }
+    }
+
+    static func expired() -> ProviderUsage {
+        issue(.tokenExpired, "Claude token expired", "Open Claude Code to renew it")
+    }
+
+    /// Maps the usage endpoint's answer to a reading or a specific failure.
+    static func response(status: Int, data: Data, kind: ClaudeCredentials.Kind) -> ProviderUsage {
+        switch status {
+        case 200:
+            return parse(data)
+        case 400 where isAPIOrganisationError(data):
+            return failure("API key login — usage limits don't apply")
+        case 401:
+            return kind == .oauth
+                ? issue(.rejected, "Claude token rejected", "Open Claude Code to sign in again")
+                : issue(.rejected, "API key rejected", "Check the key Claude Code is using")
+        case 403:
+            return issue(.rejected, "Token lacks usage scope", "Run `claude` and sign in again")
+        case 429:
+            return issue(.rateLimited, "Rate limited", "Retrying shortly")
+        case 500...599:
+            return issue(.unreachable, "Anthropic unavailable", "HTTP \(status) — retrying")
+        default:
+            return failure("HTTP \(status)")
+        }
+    }
+
+    static func transportFailure(_ error: Error) -> ProviderUsage {
+        issue(.unreachable, "Can't reach Anthropic", "Check your connection — retrying")
+    }
+
+    private static func issue(_ issue: ProviderIssue, _ message: String, _ hint: String) -> ProviderUsage {
+        .failure(id: id, name: name, accentHex: accent, order: order,
+                 message: message, hint: hint, issue: issue)
     }
 
     // MARK: - Pure parsing (unit-tested)
