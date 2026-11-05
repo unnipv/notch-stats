@@ -1,6 +1,7 @@
 import XCTest
 @testable import NotchStats
 
+@MainActor
 final class PanelSizingTests: XCTestCase {
 
     private func height(_ rows: Int, rowHeight: CGFloat = AppStore.rowHeight) -> CGFloat {
