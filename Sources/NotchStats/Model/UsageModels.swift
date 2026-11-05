@@ -14,6 +14,14 @@ struct UsageWindow: Identifiable, Sendable, Equatable {
     var remaining: Double { max(0, min(1, 1 - percent)) }
 }
 
+/// A headline number that has no quota behind it — dollars spent, say — so it
+/// is shown as a figure rather than a gauge.
+struct UsageMetric: Equatable, Sendable {
+    let label: String
+    let value: String
+    var detail: String? = nil
+}
+
 /// Why a provider has no reading. Each case has its own caption and recovery
 /// hint, so "your login is gone" is never conflated with "the keychain was
 /// momentarily unreadable" or "you're offline".
@@ -31,6 +39,19 @@ enum ProviderIssue: Equatable, Sendable {
     case rateLimited
     /// A local database was busy; the next read will usually succeed.
     case busy
+
+    /// One word for the cramped collapsed/peek bar.
+    var shortLabel: String {
+        switch self {
+        case .notSignedIn: return "Sign in"
+        case .keychainDenied: return "Keychain"
+        case .tokenExpired: return "Expired"
+        case .rejected: return "Rejected"
+        case .unreachable: return "Offline"
+        case .rateLimited: return "Limited"
+        case .busy: return "Busy"
+        }
+    }
 
     /// Worth retrying with growing delays rather than on every tick.
     var backsOff: Bool {
@@ -63,6 +84,7 @@ struct ProviderUsage: Identifiable, Sendable, Equatable {
     var issue: ProviderIssue? = nil
     /// The reading is from an earlier refresh because the latest one failed.
     var isStale = false
+    var metrics: [UsageMetric] = []
 
     var headline: UsageWindow? { windows.first }
 
@@ -77,7 +99,7 @@ struct ProviderUsage: Identifiable, Sendable, Equatable {
     /// fall back on produces no row at all.
     static func merge(_ new: ProviderUsage, previous: ProviderUsage?) -> ProviderUsage? {
         guard let issue = new.issue, issue.isTransient else { return new }
-        if let previous, previous.error == nil, !previous.windows.isEmpty || previous.note != nil {
+        if let previous, previous.error == nil, !previous.windows.isEmpty || !previous.metrics.isEmpty {
             var kept = previous
             kept.isStale = true
             kept.hint = new.error

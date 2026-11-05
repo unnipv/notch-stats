@@ -1,64 +1,85 @@
 import SwiftUI
 
+/// Design tokens. The island hangs off a black camera housing, so the whole
+/// surface is rendered in the dark appearance; text uses the system's
+/// hierarchical styles (`.primary` / `.secondary`) rather than hard-coded
+/// whites, and every spacing value is on a 4 pt grid.
 enum Theme {
     static let codex = Color(hex: "#10A37F")
     static let opencode = Color(hex: "#B47BFF")
     static let openrouter = Color(hex: "#7E8BF5")
     static let warn = Color(hex: "#FFB020")
     static let crit = Color(hex: "#FF5A4E")
-    static let subtext = Color.white.opacity(0.55)
-    static let faint = Color.white.opacity(0.35)
+    static let live = Color(hex: "#34C759")
 
+    /// 4 pt rhythm.
+    enum Space {
+        static let xs: CGFloat = 4
+        static let s: CGFloat = 8
+        static let m: CGFloat = 12
+        static let l: CGFloat = 16
+    }
+
+    /// Colour for a window that is `percent` used: the provider's own accent
+    /// until it gets tight, then amber, then red — the same thresholds
+    /// everywhere (rings, bars, numbers).
     static func urgency(_ percent: Double, base: Color) -> Color {
         if percent >= 0.90 { return crit }
         if percent >= 0.75 { return warn }
         return base
     }
 
-    // MARK: - Panel surfaces
+    static func isUrgent(_ percent: Double) -> Bool { percent >= 0.75 }
 
-    /// Expanded-panel surface: pure black at the top so it melts into the
-    /// camera housing, easing into a deep graphite blue at the bottom edge.
-    static let panelGradient = LinearGradient(
-        colors: [Color.black, Color(hex: "#04060A"), Color(hex: "#0B111A")],
-        startPoint: .top, endPoint: .bottom)
+    // MARK: - Surfaces
 
-    /// Soft light spill from the top edge that makes the panel read as glass.
-    static let panelSheen = LinearGradient(
-        colors: [Color.white.opacity(0.06), Color.white.opacity(0)],
-        startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.16))
+    /// Expanded glass: a blurred material darkened by a black wash that is
+    /// fully opaque through the menu-bar band, so the panel melts into the
+    /// camera housing and only turns translucent below it.
+    static func glassWash(bandFraction: Double) -> LinearGradient {
+        LinearGradient(stops: [
+            .init(color: .black, location: 0),
+            .init(color: .black, location: bandFraction),
+            .init(color: .black.opacity(0.62), location: min(1, bandFraction + 0.12)),
+            .init(color: .black.opacity(0.52), location: 1)
+        ], startPoint: .top, endPoint: .bottom)
+    }
 
-    /// Edge hairline. Near-invisible when collapsed so the black ear blends
-    /// into the physical notch; a touch more present when expanded.
     static func hairline(expanded: Bool) -> LinearGradient {
         LinearGradient(
-            colors: [Color.white.opacity(expanded ? 0.16 : 0.09),
-                     Color.white.opacity(expanded ? 0.05 : 0.03)],
+            colors: [Color.white.opacity(expanded ? 0.14 : 0.08),
+                     Color.white.opacity(expanded ? 0.06 : 0.03)],
             startPoint: .top, endPoint: .bottom)
     }
 
-    // MARK: - Cards
-
-    /// Row card fill: a faint top-lit wash of `tint` that lifts on hover.
-    static func card(hovering: Bool, tint: Color = .white, strength: Double = 1) -> LinearGradient {
-        let lift = hovering ? 1.6 : 1.0
-        return LinearGradient(
-            colors: [tint.opacity(0.062 * lift * strength),
-                     tint.opacity(0.034 * lift * strength)],
-            startPoint: .top, endPoint: .bottom)
+    static func card(hovering: Bool) -> Color {
+        Color.white.opacity(hovering ? 0.095 : 0.06)
     }
 
-    static func cardStroke(hovering: Bool, tint: Color = .white, strength: Double = 1) -> Color {
-        tint.opacity((hovering ? 0.14 : 0.07) * strength)
+    static func cardStroke(hovering: Bool) -> Color {
+        Color.white.opacity(hovering ? 0.16 : 0.08)
     }
 }
 
 extension View {
-    /// Rolls monospaced numerals when the rendered value changes.
+    /// Rolls numerals when the value changes — unless Reduce Motion is on.
     func numericFlip(_ value: Double) -> some View {
-        self
-            .contentTransition(.numericText())
-            .animation(.easeOut(duration: 0.35), value: value)
+        modifier(NumericFlip(value: value))
+    }
+}
+
+private struct NumericFlip: ViewModifier {
+    let value: Double
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        if reduceMotion {
+            content
+        } else {
+            content
+                .contentTransition(.numericText())
+                .animation(.easeOut(duration: 0.3), value: value)
+        }
     }
 }
 

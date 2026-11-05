@@ -12,6 +12,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusItem()
         store.start()
         dumpGeometryIfRequested()
+        snapshotIfRequested()
+    }
+
+    /// `NOTCHSTATS_SNAPSHOT=/path/out.png`: render the island once and quit.
+    private func snapshotIfRequested() {
+        guard let path = ProcessInfo.processInfo.environment["NOTCHSTATS_SNAPSHOT"] else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            island?.snapshot(to: URL(fileURLWithPath: path))
+            NSApp.terminate(nil)
+        }
     }
 
     private func dumpGeometryIfRequested() {

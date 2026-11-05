@@ -32,7 +32,7 @@ final class IslandHostingView<Content: View>: NSHostingView<Content> {
 
 /// One island window on one display.
 @MainActor
-private final class ScreenIsland {
+final class ScreenIsland {
     private let panel: IslandPanel
     private let hosting: IslandHostingView<IslandRootView>
     var geometry: IslandGeometry
@@ -76,6 +76,39 @@ private final class ScreenIsland {
         panel.orderFrontRegardless()
     }
 
+    /// Renders the island over a stand-in wallpaper and writes a PNG. Debug
+    /// aid for `NOTCHSTATS_SNAPSHOT`; used because screen capture needs a
+    /// permission this process shouldn't ask for.
+    func snapshot(to url: URL, islandSize: CGSize) {
+        hosting.layoutSubtreeIfNeeded()
+        let bounds = hosting.bounds
+        guard let rep = hosting.bitmapImageRepForCachingDisplay(in: bounds) else { return }
+        hosting.cacheDisplay(in: bounds, to: rep)
+
+        let scale = CGFloat(rep.pixelsWide) / bounds.width
+        let crop = CGSize(width: min(bounds.width, islandSize.width + 40), height: islandSize.height + 24)
+        let pixels = NSSize(width: crop.width * scale, height: crop.height * scale)
+        let output = NSImage(size: pixels)
+        output.lockFocus()
+        // Menu-bar-ish wallpaper so translucency has something to show.
+        NSGradient(colors: [NSColor(calibratedRed: 0.20, green: 0.30, blue: 0.55, alpha: 1),
+                            NSColor(calibratedRed: 0.62, green: 0.38, blue: 0.50, alpha: 1)])?
+            .draw(in: NSRect(origin: .zero, size: pixels), angle: -30)
+        let source = NSImage(size: NSSize(width: rep.pixelsWide, height: rep.pixelsHigh))
+        source.addRepresentation(rep)
+        // The island hugs the top edge of the (flipped-free) bitmap.
+        let x = (bounds.width - crop.width) / 2 * scale
+        source.draw(in: NSRect(x: -x, y: pixels.height - CGFloat(rep.pixelsHigh),
+                               width: CGFloat(rep.pixelsWide), height: CGFloat(rep.pixelsHigh)),
+                    from: .zero, operation: .sourceOver, fraction: 1)
+        output.unlockFocus()
+
+        if let tiff = output.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?
+            .representation(using: .png, properties: [:]) {
+            try? png.write(to: url)
+        }
+    }
+
     func close() {
         panel.orderOut(nil)
         panel.contentView = nil
@@ -111,6 +144,11 @@ final class IslandWindowController {
 
     func show() {
         islands.forEach { $0.show() }
+    }
+
+    func snapshot(to url: URL) {
+        guard let first = islands.first else { return }
+        first.snapshot(to: url, islandSize: store.islandSize(for: first.geometry))
     }
 
     /// Re-reads the display configuration. Call after changing display

@@ -14,32 +14,30 @@ struct Ring: View {
     var lineWidth: CGFloat = 3
     var live: Bool = false
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var clamped: Double { max(0.001, min(1, progress)) }
-    private var showsGlow: Bool { size >= 22 }
 
     var body: some View {
         ZStack {
+            // Inset by half the stroke so the ring stays inside its frame.
             Circle()
-                .stroke(color.opacity(0.16), lineWidth: lineWidth)
+                .inset(by: lineWidth / 2)
+                .stroke(color.opacity(0.18), lineWidth: lineWidth)
 
             Circle()
+                .inset(by: lineWidth / 2)
                 .trim(from: 0, to: clamped)
-                .stroke(
-                    AngularGradient(colors: [color.opacity(0.45), color],
-                                    center: .center,
-                                    startAngle: .degrees(-90),
-                                    endAngle: .degrees(270)),
-                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .shadow(color: showsGlow ? color.opacity(0.5) : .clear,
-                        radius: showsGlow ? size * 0.15 : 0)
 
             Circle()
                 .fill(color)
-                .frame(width: max(3, size * 0.26), height: max(3, size * 0.26))
+                .frame(width: max(3, size * 0.28), height: max(3, size * 0.28))
                 .opacity(live ? 1 : 0)
         }
         .frame(width: size, height: size)
-        .animation(.easeOut(duration: 0.5), value: progress)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.4), value: progress)
+        .accessibilityHidden(true)
     }
 }

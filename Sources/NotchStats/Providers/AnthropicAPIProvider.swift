@@ -43,7 +43,10 @@ struct AnthropicAPIProvider: UsageProvider {
 
     static func usage(_ spend: OpenCodeDB.AnthropicSpend) -> ProviderUsage {
         ProviderUsage(id: id, name: name, accentHex: accent, order: order,
-                      windows: [], note: note(spend), error: nil)
+                      windows: [], note: note(spend), error: nil,
+                      metrics: [UsageMetric(label: "This month",
+                                            value: money(spend.monthToDate),
+                                            detail: spend.today > 0 ? "\(money(spend.today)) today" : nil)])
     }
 
     static func note(_ spend: OpenCodeDB.AnthropicSpend) -> String {

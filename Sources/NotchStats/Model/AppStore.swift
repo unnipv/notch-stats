@@ -79,12 +79,21 @@ final class AppStore {
                           height: geometry.barHeight)
         case .expanded:
             let width = min(geometry.screen.frame.width - 120, 560)
-            // Four rows fit the base panel; providers without quota windows
-            // (Anthropic API spend) still get a full row.
-            let extraRows = max(0, providers.count - 4)
-            let height = geometry.barHeight + 400 + CGFloat(extraRows) * 78
-            return CGSize(width: width, height: height)
+            return CGSize(width: width, height: Self.expandedHeight(barHeight: geometry.barHeight,
+                                                                    rows: providers.count))
         }
+    }
+
+    /// Row metrics shared with the panel layout.
+    static let rowHeight: CGFloat = 72
+    static let rowSpacing: CGFloat = 8
+    static let footerHeight: CGFloat = 32
+
+    /// Height of the open panel: menu-bar band, the rows (at least four, so the
+    /// Activity page and an empty state have room), and the footer.
+    static func expandedHeight(barHeight: CGFloat, rows: Int) -> CGFloat {
+        let count = CGFloat(min(6, max(4, rows)))
+        return barHeight + 10 + count * rowHeight + (count - 1) * rowSpacing + 12 + footerHeight + 10
     }
 
     func provider(_ id: String) -> ProviderUsage? {
@@ -99,9 +108,9 @@ final class AppStore {
 
     func start() {
         // Documentation/screenshot mode: fictional data, no network, no reads.
-        if ProcessInfo.processInfo.environment["NOTCHSTATS_DEMO"] == "1" {
-            providers = DemoData.providers
-            sessions = DemoData.sessions
+        if let variant = ProcessInfo.processInfo.environment["NOTCHSTATS_DEMO"], !variant.isEmpty, variant != "0" {
+            providers = DemoData.providers(variant: variant)
+            apply(sessions: DemoData.sessions)
             lastRefresh = Date()
             return
         }
