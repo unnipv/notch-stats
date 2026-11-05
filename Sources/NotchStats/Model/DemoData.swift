@@ -32,8 +32,15 @@ enum DemoData {
                 note: "Max plan", error: nil),
 
             ProviderUsage(
-                id: OpenCodeGoProvider.id, name: "OpenCode Go", accentHex: OpenCodeGoProvider.accent,
+                id: AnthropicAPIProvider.id, name: "Anthropic API",
+                accentHex: AnthropicAPIProvider.accent,
                 order: 2,
+                windows: [],
+                note: "$12.40 spent this month · $1.85 today", error: nil),
+
+            ProviderUsage(
+                id: OpenCodeGoProvider.id, name: "OpenCode Go", accentHex: OpenCodeGoProvider.accent,
+                order: 3,
                 windows: [
                     UsageWindow(id: "rolling", label: "5h", percent: 0.0,
                                 resetsAt: Date().addingTimeInterval(4 * 3600 + 59 * 60)),
@@ -46,7 +53,7 @@ enum DemoData {
 
             ProviderUsage(
                 id: OpenRouterProvider.id, name: "OpenRouter", accentHex: OpenRouterProvider.accent,
-                order: 3,
+                order: 4,
                 windows: [UsageWindow(id: "credits", label: "Credits", percent: 0.89, resetsAt: nil)],
                 note: "$3.26", error: nil)
         ]

@@ -13,7 +13,7 @@ struct CodexProvider: UsageProvider {
     var order: Int { Self.order }
 
 
-    func fetch() async -> ProviderUsage {
+    func fetch() async -> ProviderUsage? {
         guard let token = Self.accessToken() else {
             return Self.failure("No credentials — run `codex login`")
         }

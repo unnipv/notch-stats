@@ -5,7 +5,7 @@ struct OpenRouterProvider: UsageProvider {
     static let id = "openrouter"
     static let name = "OpenRouter"
     static let accent = "#7E8BF5"
-    static let order = 3
+    static let order = 4
 
     var id: String { Self.id }
     var name: String { Self.name }
@@ -13,7 +13,7 @@ struct OpenRouterProvider: UsageProvider {
     var order: Int { Self.order }
 
 
-    func fetch() async -> ProviderUsage {
+    func fetch() async -> ProviderUsage? {
         guard let credential = OpenCodeDB.credentialJSON(integrationIDs: ["openrouter"]),
               let key = (credential["key"] as? String) ?? (credential["access"] as? String) else {
             return Self.failure("No OpenRouter key")

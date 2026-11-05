@@ -21,7 +21,7 @@ struct ClaudeProvider: UsageProvider {
     var accentHex: String { Self.accent }
     var order: Int { Self.order }
 
-    func fetch() async -> ProviderUsage {
+    func fetch() async -> ProviderUsage? {
         let resolution = await ClaudeCredentials.resolveAsync()
 
         guard case let .found(credential, _) = resolution else {

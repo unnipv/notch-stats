@@ -7,7 +7,9 @@ protocol UsageProvider: Sendable {
     var accentHex: String { get }
     var order: Int { get }
 
-    func fetch() async -> ProviderUsage
+    /// Returns nil when the provider isn't configured, so its row is omitted
+    /// rather than shown as an error.
+    func fetch() async -> ProviderUsage?
 }
 
 extension UsageProvider {

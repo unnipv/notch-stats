@@ -40,6 +40,7 @@ final class AppStore {
     private let engines: [UsageProvider] = [
         CodexProvider(),
         ClaudeProvider(),
+        AnthropicAPIProvider(),
         OpenCodeGoProvider(),
         OpenRouterProvider()
     ]
@@ -72,7 +73,11 @@ final class AppStore {
                           height: geometry.barHeight)
         case .expanded:
             let width = min(geometry.screen.frame.width - 120, 560)
-            return CGSize(width: width, height: geometry.barHeight + 400)
+            // Four rows fit the base panel; providers without quota windows
+            // (Anthropic API spend) still get a full row.
+            let extraRows = max(0, providers.count - 4)
+            let height = geometry.barHeight + 400 + CGFloat(extraRows) * 78
+            return CGSize(width: width, height: height)
         }
     }
 
@@ -122,18 +127,20 @@ final class AppStore {
         refreshing = true
 
         let engines = self.engines
-        let results = await withTaskGroup(of: ProviderUsage.self) { group -> [ProviderUsage] in
+        let results = await withTaskGroup(of: ProviderUsage?.self) { group -> [ProviderUsage] in
             for engine in engines {
                 // Fence each provider so one that blocks (a keychain prompt, a
                 // stalled connection) can never hold up the others.
                 group.addTask {
-                    await withTimeout(seconds: 20, fallback: engine.timedOut()) {
+                    await withTimeout(seconds: 20, fallback: engine.timedOut() as ProviderUsage?) {
                         await engine.fetch()
                     }
                 }
             }
             var collected: [ProviderUsage] = []
-            for await result in group { collected.append(result) }
+            for await result in group {
+                if let result { collected.append(result) }
+            }
             return collected
         }
 

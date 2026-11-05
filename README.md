@@ -42,6 +42,10 @@ you're almost out.
 - **Claude limits** — the 5-hour and weekly windows when you sign in with a
   Pro/Max account. An API-key login has no usage limits, and NotchStats says so
   rather than showing a made-up number.
+- **Anthropic API spend** — if you use a pay-as-you-go Anthropic key from
+  OpenCode, the month-to-date and today's spend, totalled from OpenCode's own
+  per-message cost ledger. Anthropic has no public credit-balance endpoint, so
+  this is spend, not remaining credit.
 - **OpenCode Go limits** — the rolling (5h), weekly and monthly allowances from
   the official quota endpoint, including when you're rate-limited.
 - **OpenRouter credit** — remaining balance, straight from the API.
@@ -58,7 +62,8 @@ you're almost out.
 
 - macOS 14 (Sonoma) or later. Built and tested on macOS 27.
 - A MacBook with a notch (falls back to a menu-bar pill elsewhere).
-- OpenCode v2 for OpenCode Go usage and live OpenCode sessions.
+- OpenCode v2 for OpenCode Go usage, Anthropic API spend and live OpenCode
+  sessions.
 - Codex for Codex limits and Codex sessions.
 - Claude Code for Claude limits.
 
@@ -108,6 +113,7 @@ If a provider isn't set up, its row shows an actionable caption (for example
 | --- | --- | --- |
 | **Codex / ChatGPT** | Sign in with the Codex CLI: `codex login` | `~/.codex/auth.json` |
 | **Claude** | Sign in with Claude Code: `claude` | macOS keychain (or `~/.claude/.credentials.json`) |
+| **Anthropic API** | Add an Anthropic API key in OpenCode (`/connect` → **Anthropic**, or `opencode auth login`) | `opencode.db` → `credential` (key) + per-message `cost` |
 | **OpenCode Go** | Subscribe to Go, then `/connect` in OpenCode (or `opencode auth login`) and pick **OpenCode Go** | `~/.local/share/opencode/opencode.db` → `credential` |
 | **OpenRouter** | Add your OpenRouter key in OpenCode's auth | `~/.local/share/opencode/opencode.db` → `credential` |
 | **Live OpenCode sessions** | Use OpenCode v2 normally | `opencode.db` → `session_v2`, `session_message` |
@@ -130,8 +136,10 @@ cached for a few minutes so it isn't re-read on every refresh. (Reading the
 keychain through the framework alone makes macOS ask for your login keychain
 password, which this order avoids.) If you sign in with an **API key** rather
 than a Pro/Max account, Anthropic reports that usage limits don't apply to API
-organisations — NotchStats shows that instead of inventing a number. Every
-provider is time-boxed, so a pending prompt can never stall the others.
+organisations — NotchStats shows that instead of inventing a number. When that
+key comes from OpenCode, a separate **Anthropic API** row totals your spend from
+OpenCode's local ledger. Every provider is time-boxed, so a pending prompt can
+never stall the others.
 
 ## Running it
 
@@ -164,6 +172,7 @@ endpoints. Nothing is uploaded anywhere.
 | --- | --- |
 | Codex / ChatGPT limits | `~/.codex/auth.json` → `chatgpt.com/backend-api/wham/usage` |
 | Claude limits | keychain → `api.anthropic.com/api/oauth/usage` |
+| Anthropic API spend | `opencode.db` → `session_message` (`cost` on `anthropic` assistant messages) |
 | OpenCode Go limits | `opencode.db` credential → `opencode.ai/zen/go/v1/usage` |
 | OpenRouter credit | `opencode.db` credential → `openrouter.ai/api/v1/credits` |
 | OpenCode sessions | read-only `~/.local/share/opencode/opencode.db` (`session_v2`, `session_message`) |
@@ -199,8 +208,8 @@ subprocesses. That trade buys and costs:
   no socket, no API keys to paste. It reads what your CLIs already wrote.
 - **Read-only credentials.** It never rotates or rewrites your tokens, so it
   can't break your logins.
-- **Codex + Claude + OpenCode Go + OpenRouter** in one place, including
-  OpenCode Go quota, which several notch apps don't have.
+- **Codex + Claude + Anthropic API + OpenCode Go + OpenRouter** in one place,
+  including OpenCode Go quota, which several notch apps don't have.
 
 **Where others are ahead**
 
@@ -219,8 +228,11 @@ subprocesses. That trade buys and costs:
 **Honest gaps in NotchStats**
 
 - macOS 14+, and OpenCode Go usage needs OpenCode v2.
-- No local token/cost estimates, charts or threshold alerts.
+- No local token/cost estimates beyond OpenCode's own Anthropic ledger, no
+  charts and no threshold alerts.
 - Claude limits need a Pro/Max login; API-key accounts have none to show.
+  Anthropic API spend is totalled locally from OpenCode, because Anthropic
+  exposes no credit-balance API.
 - No auto-update; unsigned (ad-hoc) builds.
 - Codex session state is coarse — it summarises the newest rollout file.
 

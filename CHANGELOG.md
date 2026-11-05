@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **Anthropic API spend.** When OpenCode holds a pay-as-you-go Anthropic API
+  key, NotchStats adds an **Anthropic API** row with month-to-date and today's
+  spend, summed from the `cost` OpenCode records on each Anthropic assistant
+  message. Anthropic exposes no credit-balance endpoint for API keys, so the row
+  reports spend rather than a made-up remaining balance. OAuth logins are left
+  out: they belong to a Claude subscription and aren't billed per use.
+- Providers without a quota window get a dollar gauge instead of an empty ring,
+  and the expanded panel grows to fit the extra row.
+- **Claude in the notch bar.** The 5-hour and weekly windows now also drive a
+  compact live indicator, stacked under OpenCode Go on the right ear, so Codex,
+  Claude and OpenCode Go are all visible without expanding the panel.
+
 ## 0.2.1
 
 - Read the Claude credential with `security` **first**, the way Claude Code

@@ -73,37 +73,112 @@ struct IslandBackground: View {
 
 enum EarSide { case left, right }
 
+/// One provider shown in the collapsed/peek bar.
+private struct BarEntry: Identifiable {
+    let provider: ProviderUsage
+    let live: Bool
+    var id: String { provider.id }
+}
+
 struct BarView: View {
     let store: AppStore
     let geometry: IslandGeometry
     var detailed: Bool
 
+    /// Providers worth a bar indicator: anything with a quota window. Codex
+    /// owns the left ear; Claude and OpenCode Go share the right one.
+    private var entries: [BarEntry] {
+        [(CodexProvider.id, AgentKind.codex),
+         (ClaudeProvider.id, AgentKind.claude),
+         (OpenCodeGoProvider.id, AgentKind.opencode)]
+            .compactMap { id, kind in
+                guard let provider = store.provider(id), provider.headline != nil else { return nil }
+                return BarEntry(provider: provider, live: store.isAgentLive(kind))
+            }
+    }
+
     var body: some View {
-        let codex = store.provider("codex")
-        let opencode = store.provider("opencode")
+        let codex = entries.first { $0.provider.id == CodexProvider.id }
+        let others = entries.filter { $0.provider.id != CodexProvider.id }
 
         return Group {
             if geometry.hasNotch {
                 HStack(spacing: 0) {
-                    Ear(provider: codex, side: .left, detailed: detailed,
-                        live: store.isAgentLive(.codex), ringSize: detailed ? 24 : 14)
+                    Ear(provider: codex?.provider, side: .left, detailed: detailed,
+                        live: codex?.live ?? false, ringSize: detailed ? 24 : 14)
                         .frame(width: geometry.earWidth, alignment: .leading)
                     Spacer(minLength: 0)
-                    Ear(provider: opencode, side: .right, detailed: detailed,
-                        live: store.isAgentLive(.opencode), ringSize: detailed ? 24 : 14)
+                    EarStack(entries: others, side: .right, detailed: detailed)
                         .frame(width: geometry.earWidth, alignment: .trailing)
                 }
             } else {
                 HStack(spacing: 16) {
-                    Ear(provider: codex, side: .left, detailed: detailed,
-                        live: store.isAgentLive(.codex), ringSize: detailed ? 24 : 15)
-                    Ear(provider: opencode, side: .right, detailed: detailed,
-                        live: store.isAgentLive(.opencode), ringSize: detailed ? 24 : 15)
+                    ForEach(entries) { entry in
+                        Ear(provider: entry.provider,
+                            side: entry.provider.id == CodexProvider.id ? .left : .right,
+                            detailed: detailed,
+                            live: entry.live,
+                            ringSize: detailed ? 24 : 15)
+                    }
                 }
                 .padding(.horizontal, 16)
             }
         }
         .frame(maxHeight: .infinity)
+    }
+}
+
+/// An ear holding one or more indicators. Two providers stack vertically so
+/// the island can stay notch-wide; a single provider keeps the roomy layout.
+private struct EarStack: View {
+    let entries: [BarEntry]
+    var side: EarSide = .right
+    var detailed: Bool = false
+
+    var body: some View {
+        if entries.isEmpty {
+            Circle()
+                .fill(Color.white.opacity(0.18))
+                .frame(width: 6, height: 6)
+        } else if entries.count == 1, let entry = entries.first {
+            Ear(provider: entry.provider, side: side, detailed: detailed,
+                live: entry.live, ringSize: detailed ? 24 : 14)
+        } else {
+            VStack(alignment: side == .left ? .leading : .trailing, spacing: 2) {
+                ForEach(entries) { entry in
+                    CompactEarRow(entry: entry, side: side, detailed: detailed)
+                }
+            }
+            .padding(.horizontal, 6)
+        }
+    }
+}
+
+private struct CompactEarRow: View {
+    let entry: BarEntry
+    let side: EarSide
+    let detailed: Bool
+
+    var body: some View {
+        if let window = entry.provider.headline {
+            let color = Theme.urgency(window.percent, base: Color(hex: entry.provider.accentHex))
+            let ring = Ring(progress: window.remaining, color: color,
+                            size: detailed ? 14 : 11,
+                            lineWidth: detailed ? 2.5 : 2,
+                            live: entry.live)
+            let label = Text(Format.percent(window.remaining))
+                .font(.system(size: detailed ? 12 : 10,
+                              weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .numericFlip(window.remaining)
+
+            HStack(spacing: detailed ? 5 : 4) {
+                if side == .left { ring; label } else { label; ring }
+            }
+        }
     }
 }
 
@@ -317,10 +392,22 @@ struct ProviderRow: View {
                         .foregroundStyle(Theme.crit)
                 }
                 .frame(width: 38, height: 38)
-            } else {
-                Ring(progress: provider.headline?.remaining ?? 0,
+            } else if let headline = provider.headline {
+                Ring(progress: headline.remaining,
                      color: tint,
                      size: 38, lineWidth: 5)
+            } else {
+                // No quota window, just a number (Anthropic API spend): a gauge
+                // would imply a total we don't know.
+                ZStack {
+                    Circle()
+                        .stroke(accent.opacity(0.35), lineWidth: 2)
+                        .frame(width: 34, height: 34)
+                    Image(systemName: "dollarsign")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(accent)
+                }
+                .frame(width: 38, height: 38)
             }
 
             VStack(alignment: .leading, spacing: 2) {
