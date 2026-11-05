@@ -33,14 +33,14 @@ struct PanelMessage: View {
         VStack(spacing: Theme.Space.s) {
             Image(systemName: symbol)
                 .font(.system(size: 20, weight: .regular))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.label)
                 .frame(width: 44, height: 44)
                 .background(Circle().fill(Color.white.opacity(0.06)))
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
             Text(detail)
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.label)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -138,7 +138,7 @@ struct ProviderRow: View {
                 if let line = secondary {
                     Text(line)
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.label)
                         .lineLimit(1)
                 }
             }
@@ -247,7 +247,7 @@ struct WindowFigure: View {
                     .numericFlip(window.remaining)
             }
             Capsule()
-                .fill(Color.white.opacity(0.10))
+                .fill(Theme.track)
                 .frame(height: 3)
                 .overlay(alignment: .leading) {
                     GeometryReader { proxy in

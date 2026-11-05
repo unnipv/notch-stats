@@ -24,6 +24,10 @@ struct IslandRootView: View {
         .animation(reduceMotion ? .easeOut(duration: 0.12)
                                 : .spring(response: 0.32, dampingFraction: 0.9),
                    value: store.state)
+        // The open panel is sized to its rows; when their number changes it
+        // eases to the new height (or snaps, under Reduce Motion).
+        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.9),
+                   value: size.height)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // The island is anchored to a black camera housing: always dark.
         .environment(\.colorScheme, .dark)
@@ -70,6 +74,12 @@ struct IslandBackground: View {
             shape
                 .fill(.ultraThinMaterial)
                 .overlay(shape.fill(Theme.glassWash(bandFraction: band)))
+                .overlay(alignment: .top) {
+                    Theme.notchShadow
+                        .frame(height: 14)
+                        .offset(y: geometry.barHeight)
+                        .clipShape(shape)
+                }
                 .overlay(hairline)
         } else {
             // Collapsed/peek: pure black so the ear merges with the housing.

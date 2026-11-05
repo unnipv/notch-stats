@@ -57,7 +57,7 @@ struct SessionRow: View {
                     .lineLimit(1)
                 Text(subtitle)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.label)
                     .lineLimit(1)
             }
 
@@ -66,10 +66,10 @@ struct SessionRow: View {
             Text(Format.ago(session.updatedAt))
                 .font(.system(size: 11))
                 .monospacedDigit()
-                .foregroundStyle(live ? Theme.live : Color.secondary)
+                .foregroundStyle(live ? Theme.live : Theme.label)
         }
         .padding(.horizontal, Theme.Space.m)
-        .frame(height: 52)
+        .frame(height: AppStore.sessionRowHeight)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Theme.card(hovering: hovering))
@@ -97,7 +97,7 @@ struct SessionRow: View {
                 .frame(width: 28, height: 28)
             Image(systemName: session.state.symbol)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(live ? accent : Color.secondary)
+                .foregroundStyle(live ? accent : Theme.label)
         }
     }
 

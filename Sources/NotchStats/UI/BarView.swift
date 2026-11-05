@@ -269,7 +269,7 @@ struct Ear: View {
                 Text("resets \(reset)")
                     .font(.system(size: 10))
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.label)
                     .lineLimit(1)
                     .fixedSize()
             }

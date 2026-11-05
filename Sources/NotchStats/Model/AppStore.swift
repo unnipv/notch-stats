@@ -80,21 +80,36 @@ final class AppStore {
         case .expanded:
             let width = min(geometry.screen.frame.width - 120, 560)
             return CGSize(width: width, height: Self.expandedHeight(barHeight: geometry.barHeight,
-                                                                    rows: providers.count))
+                                                                    rows: contentRows,
+                                                                    rowHeight: contentRowHeight))
         }
     }
 
     /// Row metrics shared with the panel layout.
     static let rowHeight: CGFloat = 72
+    static let sessionRowHeight: CGFloat = 52
     static let rowSpacing: CGFloat = 8
     static let footerHeight: CGFloat = 32
 
-    /// Height of the open panel: menu-bar band, the rows, and the footer. Always
-    /// room for five rows — every provider NotchStats knows — so the panel is the
-    /// same component whether three or five are showing, and never resizes when a
-    /// refresh adds or drops one.
-    static func expandedHeight(barHeight: CGFloat, rows: Int) -> CGFloat {
-        let count = CGFloat(min(6, max(5, rows)))
+    /// Rows the current page shows. An empty page (loading, no providers, no
+    /// sessions) gets three rows of room for its message.
+    private var contentRows: Int {
+        switch page {
+        case .usage: return providers.isEmpty ? 3 : min(6, providers.count)
+        case .activity: return sessions.isEmpty ? 3 : min(6, sessions.count)
+        }
+    }
+
+    private var contentRowHeight: CGFloat {
+        page == .usage ? Self.rowHeight : Self.sessionRowHeight
+    }
+
+    /// Height of the open panel: the menu-bar band, exactly the rows being
+    /// shown, and the footer — no reserved space. The height only changes when
+    /// the number of rows does (or the page), which is rare, so a refresh
+    /// never makes the panel twitch.
+    static func expandedHeight(barHeight: CGFloat, rows: Int, rowHeight: CGFloat) -> CGFloat {
+        let count = CGFloat(max(1, rows))
         return barHeight + 10 + count * rowHeight + (count - 1) * rowSpacing + 12 + footerHeight + 10
     }
 

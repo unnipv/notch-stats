@@ -33,7 +33,7 @@ struct ExpandedView: View {
                 tab("Activity", .activity, badge: store.liveAgents.isEmpty ? nil : store.liveAgents.count)
             }
             .padding(2)
-            .background(Capsule().fill(Color.white.opacity(0.07)))
+            .background(Capsule().fill(Color.white.opacity(0.14)))
             Spacer(minLength: 0)
             Text(status)
                 .font(.system(size: 11))
@@ -69,10 +69,10 @@ struct ExpandedView: View {
                         .background(Capsule().fill(Theme.live))
                 }
             }
-            .foregroundStyle(selected ? Color.primary : Color.secondary)
+            .foregroundStyle(selected ? Color.primary : Theme.label)
             .padding(.horizontal, Theme.Space.m)
             .frame(height: 22)
-            .background(Capsule().fill(selected ? Color.white.opacity(0.14) : .clear))
+            .background(Capsule().fill(selected ? Color.white.opacity(0.22) : .clear))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -85,7 +85,7 @@ struct ExpandedView: View {
     private var footer: some View {
         VStack(spacing: 0) {
             Rectangle()
-                .fill(Color.white.opacity(0.07))
+                .fill(Color.white.opacity(0.14))
                 .frame(height: 0.5)
                 .padding(.horizontal, Theme.margin)
             HStack(spacing: 6) {

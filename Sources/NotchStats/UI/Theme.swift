@@ -17,9 +17,11 @@ enum Theme {
     static let crit = Color(hex: "#FF3B6B")
 
     /// Labels and countdowns: the second-most-read text on a row.
-    static let label = Color.white.opacity(0.74)
+    static let label = Color.white.opacity(0.88)
     /// Decorative glyphs next to a label.
-    static let glyph = Color.white.opacity(0.5)
+    static let glyph = Color.white.opacity(0.65)
+    /// The unfilled part of a bar: enough to show how much is left.
+    static let track = Color.white.opacity(0.22)
 
     /// Left and right margin shared by the header, the cards and the footer.
     static let margin: CGFloat = 16
@@ -52,31 +54,41 @@ enum Theme {
 
     // MARK: - Surfaces
 
-    /// Expanded glass: a blurred material darkened by a black wash that is
-    /// fully opaque through the menu-bar band, so the panel melts into the
-    /// camera housing and only turns translucent below it.
+    /// Expanded glass: `.ultraThinMaterial` with only a light black wash over it
+    /// (~0.30) so the desktop shows through the blur. The wash is fully opaque
+    /// through the menu-bar band — where the notch and the ears sit — and eases
+    /// out just below it.
     static func glassWash(bandFraction: Double) -> LinearGradient {
         LinearGradient(stops: [
             .init(color: .black, location: 0),
             .init(color: .black, location: bandFraction),
-            .init(color: .black.opacity(0.62), location: min(1, bandFraction + 0.12)),
-            .init(color: .black.opacity(0.52), location: 1)
+            .init(color: .black.opacity(0.30), location: min(1, bandFraction + 0.05)),
+            .init(color: .black.opacity(0.30), location: 1)
         ], startPoint: .top, endPoint: .bottom)
     }
 
+    /// A soft shadow just under the notch band, so the opaque band doesn't end
+    /// in a hard line against the translucent panel.
+    static let notchShadow = LinearGradient(
+        colors: [Color.black.opacity(0.45), Color.black.opacity(0)],
+        startPoint: .top, endPoint: .bottom)
+
+    /// Edge hairline with a brighter highlight along the top.
     static func hairline(expanded: Bool) -> LinearGradient {
         LinearGradient(
-            colors: [Color.white.opacity(expanded ? 0.14 : 0.08),
-                     Color.white.opacity(expanded ? 0.06 : 0.03)],
+            colors: [Color.white.opacity(expanded ? 0.34 : 0.08),
+                     Color.white.opacity(expanded ? 0.10 : 0.03)],
             startPoint: .top, endPoint: .bottom)
     }
 
+    /// Cards carry the legibility that the lighter wash no longer provides:
+    /// a stronger fill and stroke than they would need on flat black.
     static func card(hovering: Bool) -> Color {
-        Color.white.opacity(hovering ? 0.095 : 0.06)
+        Color.white.opacity(hovering ? 0.15 : 0.11)
     }
 
     static func cardStroke(hovering: Bool) -> Color {
-        Color.white.opacity(hovering ? 0.16 : 0.08)
+        Color.white.opacity(hovering ? 0.26 : 0.16)
     }
 }
 
