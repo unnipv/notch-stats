@@ -15,7 +15,7 @@ struct ActivityView: View {
                                 SessionRow(session: session)
                             }
                         }
-                        .padding(.horizontal, Theme.Space.m)
+                        .padding(.horizontal, Theme.margin)
                     }
                 }
                 .mask(fadeMask(height: proxy.size.height))

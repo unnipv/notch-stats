@@ -38,10 +38,10 @@ struct ExpandedView: View {
             Text(status)
                 .font(.system(size: 11))
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.label)
                 .lineLimit(1)
         }
-        .padding(.horizontal, Theme.Space.l)
+        .padding(.horizontal, Theme.margin)
     }
 
     private var status: String {
@@ -87,7 +87,7 @@ struct ExpandedView: View {
             Rectangle()
                 .fill(Color.white.opacity(0.07))
                 .frame(height: 0.5)
-                .padding(.horizontal, Theme.Space.l)
+                .padding(.horizontal, Theme.margin)
             HStack(spacing: 6) {
                 switch store.page {
                 case .usage:
@@ -117,8 +117,8 @@ struct ExpandedView: View {
             }
             .font(.system(size: 11))
             .monospacedDigit()
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, Theme.Space.l)
+            .foregroundStyle(Theme.label)
+            .padding(.horizontal, Theme.margin)
             .frame(maxHeight: .infinity)
         }
     }

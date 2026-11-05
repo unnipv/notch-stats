@@ -89,10 +89,12 @@ final class AppStore {
     static let rowSpacing: CGFloat = 8
     static let footerHeight: CGFloat = 32
 
-    /// Height of the open panel: menu-bar band, the rows (at least four, so the
-    /// Activity page and an empty state have room), and the footer.
+    /// Height of the open panel: menu-bar band, the rows, and the footer. Always
+    /// room for five rows — every provider NotchStats knows — so the panel is the
+    /// same component whether three or five are showing, and never resizes when a
+    /// refresh adds or drops one.
     static func expandedHeight(barHeight: CGFloat, rows: Int) -> CGFloat {
-        let count = CGFloat(min(6, max(4, rows)))
+        let count = CGFloat(min(6, max(5, rows)))
         return barHeight + 10 + count * rowHeight + (count - 1) * rowSpacing + 12 + footerHeight + 10
     }
 

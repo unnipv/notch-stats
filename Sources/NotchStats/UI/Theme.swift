@@ -8,9 +8,21 @@ enum Theme {
     static let codex = Color(hex: "#10A37F")
     static let opencode = Color(hex: "#B47BFF")
     static let openrouter = Color(hex: "#7E8BF5")
-    static let warn = Color(hex: "#FFB020")
-    static let crit = Color(hex: "#FF5A4E")
     static let live = Color(hex: "#34C759")
+
+    // Warnings own two hues no provider accent can produce (accents are green,
+    // terracotta, purple and indigo), and in the panel they always come with a
+    // glyph as well, so colour never has to carry the meaning alone.
+    static let warn = Color(hex: "#FFD60A")
+    static let crit = Color(hex: "#FF3B6B")
+
+    /// Labels and countdowns: the second-most-read text on a row.
+    static let label = Color.white.opacity(0.74)
+    /// Decorative glyphs next to a label.
+    static let glyph = Color.white.opacity(0.5)
+
+    /// Left and right margin shared by the header, the cards and the footer.
+    static let margin: CGFloat = 16
 
     /// 4 pt rhythm.
     enum Space {
@@ -21,7 +33,7 @@ enum Theme {
     }
 
     /// Colour for a window that is `percent` used: the provider's own accent
-    /// until it gets tight, then amber, then red — the same thresholds
+    /// until it gets tight, then yellow, then pink-red — the same thresholds
     /// everywhere (rings, bars, numbers).
     static func urgency(_ percent: Double, base: Color) -> Color {
         if percent >= 0.90 { return crit }
@@ -30,6 +42,13 @@ enum Theme {
     }
 
     static func isUrgent(_ percent: Double) -> Bool { percent >= 0.75 }
+
+    /// The shape cue that accompanies a warning colour in the panel.
+    static func urgencyGlyph(_ percent: Double) -> String? {
+        if percent >= 0.90 { return "exclamationmark.octagon.fill" }
+        if percent >= 0.75 { return "exclamationmark.triangle.fill" }
+        return nil
+    }
 
     // MARK: - Surfaces
 

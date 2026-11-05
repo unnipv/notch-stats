@@ -18,6 +18,8 @@ enum DemoData {
         case "empty": return []
         case "errors": return errorSet
         case "urgent": return urgentSet
+        case "three": return [healthy[0], healthy[1], healthy[3]]
+        case "four": return Array(healthy.prefix(4))
         default: return healthy
         }
     }

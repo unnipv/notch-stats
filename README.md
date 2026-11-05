@@ -251,13 +251,21 @@ swift test           # unit tests
 ./scripts/make-icns.sh
 ```
 
-Test hooks (development only):
+Test hooks (development only — every one is read from the environment at
+launch, so a normal launch from Finder or at login never runs any of them; the
+snapshot renders the view without the window blur, so it cannot show the glass):
 
 ```sh
 NOTCHSTATS_STATE=collapsed|peek|expanded
 NOTCHSTATS_PAGE=activity
 NOTCHSTATS_DEBUG_BG=1     # tint the island so its bounds are visible in screenshots
 NOTCHSTATS_DUMP=1         # print notch geometry + status item state to stderr
+NOTCHSTATS_DEMO=1|errors|urgent|empty|three|four
+                          # fictional data, no network or file reads; the variants
+                          # exercise error, tight-quota, empty and fewer-row panels
+NOTCHSTATS_SNAPSHOT=/path/out.png
+                          # render the island once over a stand-in wallpaper, write a
+                          # PNG and quit (no screen-recording permission needed)
 scripts/cpu.sh <pid> 10   # true CPU usage over a window
 ```
 

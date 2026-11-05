@@ -17,7 +17,7 @@ struct UsageList: View {
                     ProviderRow(provider: provider)
                 }
             }
-            .padding(.horizontal, Theme.Space.m)
+            .padding(.horizontal, Theme.margin)
         }
     }
 }
@@ -49,12 +49,26 @@ struct PanelMessage: View {
     }
 }
 
-/// One provider: identity on the left, its numbers on the right.
+/// The one grid every row sits on: three equal slots, right-aligned, with the
+/// same gutter between them. A row with three figures fills all three slots; two
+/// figures take the right-hand two; a lone figure (spend, credits) spans the
+/// right-hand two. Whatever the count, every left edge lands on the same set of
+/// vertical lines and every row ends on the same right edge.
+enum UsageGrid {
+    static let slot: CGFloat = 104
+    static let gutter: CGFloat = 16
+    static var span: CGFloat { slot * 2 + gutter }
+    static var total: CGFloat { slot * 3 + gutter * 2 }
+
+    static func width(forFigures count: Int) -> CGFloat { count == 1 ? span : slot }
+}
+
+/// One provider: identity on the left, its figures on the grid on the right.
 ///
 /// Every number is "left", never "used", and the big figure is always the
 /// first thing in a column. A provider with no quota (dollar spend) shows a
-/// figure column instead of a gauge, so nothing implies a limit that doesn't
-/// exist; a provider that can't be read says why, and what to do.
+/// figure instead of a gauge, so nothing implies a limit that doesn't exist; a
+/// provider that can't be read says why, and what to do.
 struct ProviderRow: View {
     let provider: ProviderUsage
     @State private var hovering = false
@@ -64,19 +78,13 @@ struct ProviderRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: Theme.Space.m) {
             identity
-                .frame(width: 128, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             if let error = provider.error {
                 failure(error)
+                    .frame(width: UsageGrid.total, alignment: .trailing)
             } else {
-                HStack(spacing: Theme.Space.m) {
-                    ForEach(provider.windows) { window in
-                        WindowFigure(window: window, accent: accent, dimmed: provider.isStale)
-                    }
-                    ForEach(provider.metrics, id: \.label) { metric in
-                        MetricFigure(metric: metric)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                figures
+                    .frame(width: UsageGrid.total, alignment: .trailing)
             }
         }
         .padding(.horizontal, Theme.Space.l)
@@ -93,6 +101,28 @@ struct ProviderRow: View {
         .animation(.easeOut(duration: 0.12), value: hovering)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spoken)
+    }
+
+    private var figures: some View {
+        let count = provider.windows.count + provider.metrics.count
+        let width = UsageGrid.width(forFigures: count)
+        return HStack(spacing: UsageGrid.gutter) {
+            ForEach(provider.windows) { window in
+                WindowFigure(window: window, accent: accent, width: width,
+                             detail: detail(for: window), dimmed: provider.isStale)
+            }
+            ForEach(provider.metrics, id: \.label) { metric in
+                MetricFigure(metric: metric, width: width)
+            }
+        }
+    }
+
+    /// A window without a reset time (credits) shows the provider's own note —
+    /// the dollar balance — where a countdown would go.
+    private func detail(for window: UsageWindow) -> WindowFigure.Detail? {
+        if let reset = Format.countdown(to: window.resetsAt) { return .reset(reset) }
+        if provider.windows.count == 1, let note = provider.note { return .text(note) }
+        return nil
     }
 
     private var identity: some View {
@@ -135,8 +165,8 @@ struct ProviderRow: View {
             }
             if let hint = provider.hint {
                 Text(hint)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.label)
                     .lineLimit(1)
             }
         }
@@ -162,36 +192,60 @@ struct ProviderRow: View {
 }
 
 /// One quota window: label and reset time on a line, the remaining share as
-/// the figure, and a hairline bar underneath.
+/// the figure, and a hairline bar underneath. A tight window turns the figure
+/// and bar warning-coloured *and* gains a glyph.
 struct WindowFigure: View {
+    enum Detail {
+        case reset(String)
+        case text(String)
+    }
+
     let window: UsageWindow
     let accent: Color
+    var width: CGFloat = UsageGrid.slot
+    var detail: Detail?
     var dimmed = false
 
     var body: some View {
+        let urgent = Theme.isUrgent(window.percent)
         let tint = Theme.urgency(window.percent, base: accent)
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Text(window.label)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.label)
                 Spacer(minLength: 0)
-                if let reset = Format.countdown(to: window.resetsAt) {
+                switch detail {
+                case let .reset(time):
                     Image(systemName: "arrow.counterclockwise")
                         .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                    Text(reset)
-                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.glyph)
+                    Text(time)
+                        .font(.system(size: 11, weight: .medium))
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.label)
+                case let .text(text):
+                    Text(text)
+                        .font(.system(size: 11, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.label)
+                case nil:
+                    EmptyView()
                 }
             }
             .lineLimit(1)
-            Text(Format.percent(window.remaining))
-                .font(.system(size: 20, weight: .semibold))
-                .monospacedDigit()
-                .foregroundStyle(Theme.isUrgent(window.percent) ? tint : .primary)
-                .numericFlip(window.remaining)
+            HStack(spacing: 4) {
+                if urgent, let glyph = Theme.urgencyGlyph(window.percent) {
+                    Image(systemName: glyph)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(tint)
+                }
+                Text(Format.percent(window.remaining))
+                    .font(.system(size: 20, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(urgent ? tint : .primary)
+                    .numericFlip(window.remaining)
+            }
             Capsule()
                 .fill(Color.white.opacity(0.10))
                 .frame(height: 3)
@@ -203,7 +257,7 @@ struct WindowFigure: View {
                     }
                 }
         }
-        .frame(width: 104)
+        .frame(width: width)
         .opacity(dimmed ? 0.55 : 1)
     }
 }
@@ -212,19 +266,20 @@ struct WindowFigure: View {
 /// label and detail on one line, the figure beneath — with no gauge.
 struct MetricFigure: View {
     let metric: UsageMetric
+    var width: CGFloat = UsageGrid.span
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Text(metric.label)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.label)
                 Spacer(minLength: 0)
                 if let detail = metric.detail {
                     Text(detail)
-                        .font(.system(size: 11))
+                        .font(.system(size: 11, weight: .medium))
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.label)
                 }
             }
             .lineLimit(1)
@@ -235,6 +290,6 @@ struct MetricFigure: View {
             // Where a window draws its bar; keeps the baselines aligned.
             Color.clear.frame(height: 3)
         }
-        .frame(width: 168, alignment: .leading)
+        .frame(width: width, alignment: .leading)
     }
 }
