@@ -4,7 +4,8 @@ import Foundation
 ///
 /// Anthropic ships no public usage endpoint for end users; Claude Code itself
 /// calls `api.anthropic.com/api/oauth/usage`, so we do the same. The token is
-/// read from Claude Code's own credential store and never refreshed here.
+/// read from Claude Code's own credentials file (or, if the user opted in, its
+/// keychain item) and never refreshed here.
 ///
 /// What you get depends on how you signed in:
 /// - **OAuth** (`sk-ant-oat…`, Pro/Max): the 5-hour and weekly windows.
@@ -49,8 +50,8 @@ struct ClaudeProvider: UsageProvider {
             let (data, response) = try await HTTP.session.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             if status == 401 {
-                // The credential may have been rotated underneath us; make the
-                // next attempt read the keychain again.
+                // The credential may have been rotated underneath us; forget
+                // the remembered one so the next attempt reads the sources again.
                 ClaudeCredentials.invalidate()
             }
             return Self.response(status: status, data: data, kind: credential.kind)
@@ -66,10 +67,14 @@ struct ClaudeProvider: UsageProvider {
         switch failure {
         case .notSignedIn:
             return issue(.notSignedIn, "Not signed in to Claude", "Run `claude` to sign in")
+        case .keychainNotAllowed:
+            return issue(.keychainNotAllowed, "Claude login found, not readable",
+                         "Menu bar ▸ Allow Keychain Access")
         case .keychainDenied:
-            return issue(.keychainDenied, "Keychain access denied", "Unlock your login keychain, then refresh")
-        case .keychainTimedOut:
-            return issue(.keychainDenied, "Keychain not responding", "Retrying — unlock your login keychain")
+            return issue(.keychainDenied, "Keychain access denied",
+                         "Unlock the keychain, or re-enable it in the menu")
+        case .fileUnreadable:
+            return issue(.unreadable, "Claude credentials unreadable", "File is being rewritten — retrying")
         }
     }
 

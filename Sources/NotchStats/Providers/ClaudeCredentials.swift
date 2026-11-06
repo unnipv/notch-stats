@@ -1,13 +1,20 @@
 import Foundation
 import Security
 
-/// Finds the credential Claude Code already wrote, without ever modifying it.
+/// Finds the credential Claude Code already wrote, without ever modifying it
+/// and — unless the user opted in — without ever being able to make macOS ask
+/// for a password.
 ///
-/// Sources, tried in order, each with its own time budget:
+/// Sources, tried in order:
 /// 1. the `CLAUDE_CODE_OAUTH_TOKEN` environment variable,
-/// 2. Claude Code's own lookup — `/usr/bin/security find-generic-password`,
-/// 3. the macOS keychain via the Security framework (never prompts),
-/// 4. `~/.claude/.credentials.json`.
+/// 2. `~/.claude/.credentials.json` — a plain file, no keychain involved,
+/// 3. the login keychain, **only** when "Allow Keychain Access" is on.
+///
+/// With the opt-in off the keychain is only ever *probed* for the existence of
+/// an item (attributes, never the secret), and that probe is configured to
+/// fail instead of showing a dialog. Every keychain call that can return the
+/// secret also fails rather than prompts, except the single one the user
+/// triggers by turning the opt-in on (`requestKeychainAccess`).
 ///
 /// Two kinds of credential turn up in practice and they behave differently: an
 /// **OAuth token** (`sk-ant-oat…`, Pro/Max login) can report usage limits, while
@@ -38,20 +45,33 @@ enum ClaudeCredentials {
 
     enum Source: String {
         case environment = "environment"
-        case securityCLI = "security CLI"
-        case keychain = "keychain"
         case file = "credentials file"
+        case keychain = "keychain"
+        /// The last good credential, kept briefly while the file is missing or
+        /// being rewritten.
+        case lastKnown = "last known"
     }
 
     /// Why nothing was found. Kept apart so a *failed read* is never reported
     /// as a *missing login*.
     enum Failure: Equatable {
+        /// Every place we may look answered "nothing here".
         case notSignedIn
+        /// The keychain holds a Claude login, but the opt-in is off.
+        case keychainNotAllowed
+        /// The keychain is locked or refused a read we were allowed to try.
         case keychainDenied
-        case keychainTimedOut
+        /// The credentials file is there but cannot be read yet — usually the
+        /// CLI is rewriting it.
+        case fileUnreadable
 
         var issue: ProviderIssue {
-            self == .notSignedIn ? .notSignedIn : .keychainDenied
+            switch self {
+            case .notSignedIn: return .notSignedIn
+            case .keychainNotAllowed: return .keychainNotAllowed
+            case .keychainDenied: return .keychainDenied
+            case .fileUnreadable: return .unreadable
+            }
         }
     }
 
@@ -60,257 +80,220 @@ enum ClaudeCredentials {
         case missing(Failure)
     }
 
-    /// What one lookup source reported.
-    enum Outcome: Equatable {
-        case found
-        case notFound
-        case denied
-        case timedOut
+    // MARK: - Seam
+
+    enum FileRead: Equatable {
+        case absent
+        case unreadable
+        case data(Data)
     }
 
-    // MARK: - Caching
+    /// Answer to "is there a Claude item in the keychain?" — attributes only.
+    enum KeychainProbe: Equatable {
+        case present
+        case absent
+        /// Locked, or the call failed: we can't tell.
+        case unknown
+    }
 
-    /// A found credential is reused for five minutes — unless it has expired,
-    /// in which case Claude Code may have renewed it already. A failure is only
-    /// remembered for seconds, so one locked keychain or slow read cannot make a
-    /// perfectly good login look absent.
-    enum CachePolicy {
-        static let foundLifetime: TimeInterval = 300
-        static let failureLifetime: TimeInterval = 10
+    /// Answer to a secret read that was not allowed to prompt.
+    enum KeychainSecret: Equatable {
+        case found(Data)
+        case absent
+        /// The item exists (or the keychain is locked) and we may not read it.
+        case refused
+    }
 
-        static func isFresh(_ resolution: Resolution, age: TimeInterval, now: Date = Date()) -> Bool {
-            switch resolution {
-            case let .found(credential, _):
-                return age >= 0 && age < foundLifetime && !credential.isExpired(now: now)
-            case .missing:
-                return age >= 0 && age < failureLifetime
-            }
+    /// Everything resolution consults, so the order is testable without
+    /// touching the real keychain or the real home directory.
+    struct Inputs {
+        var environment: [String: String]
+        var readFile: () -> FileRead
+        var keychainAllowed: Bool
+        var probeKeychain: () -> KeychainProbe
+        var readKeychain: () -> KeychainSecret
+
+        static func live(keychainAllowed: Bool) -> Inputs {
+            Inputs(environment: ProcessInfo.processInfo.environment,
+                   readFile: Keychain.liveFileRead,
+                   keychainAllowed: keychainAllowed,
+                   probeKeychain: { Keychain.probe() },
+                   readKeychain: { Keychain.readSecret(interaction: .fail) })
         }
     }
 
-    /// Picks the failure to report when no source produced a credential.
-    /// Anything other than a clean "not found" means we don't *know* the login
-    /// is gone, so it must not be called missing.
-    static func failure(from outcomes: [Outcome]) -> Failure {
-        if outcomes.contains(.denied) { return .keychainDenied }
-        if outcomes.contains(.timedOut) { return .keychainTimedOut }
-        return .notSignedIn
+    struct LastGood: Equatable {
+        let credential: Credential
+        let source: Source
+        let at: Date
     }
 
-    private static let state = Locked<(resolution: Resolution, at: Date)?>(nil)
+    /// How long a good credential outlives a missing or half-written file.
+    static let graceLifetime: TimeInterval = 120
 
-    /// Forgets what was read, so the next resolve goes back to the keychain
-    /// (after a 401, a wake, or a manual refresh).
-    static func invalidate() { state.withLock { $0 = nil } }
+    /// Pure resolution. The keychain is not consulted unless `keychainAllowed`
+    /// — apart from the attribute-only probe that makes a missing login and an
+    /// unreadable one look different.
+    static func resolve(_ inputs: Inputs, lastGood: LastGood?, now: Date = Date()) -> Resolution {
+        if let raw = inputs.environment["CLAUDE_CODE_OAUTH_TOKEN"] {
+            let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !token.isEmpty {
+                return .found(Credential(token: token, kind: .init(token: token), expiresAt: nil), .environment)
+            }
+        }
 
-    private static func remember(_ resolution: Resolution) -> Resolution {
-        state.withLock { $0 = (resolution, Date()) }
-        return resolution
+        var fileProblem = false
+        switch inputs.readFile() {
+        case .absent:
+            break
+        case .unreadable:
+            fileProblem = true
+        case let .data(data):
+            if let credential = credential(from: data) { return .found(credential, .file) }
+            // Present but not parseable: the CLI writes it non-atomically.
+            fileProblem = true
+        }
+
+        var keychain: Failure?
+        if inputs.keychainAllowed {
+            switch inputs.readKeychain() {
+            case let .found(data):
+                if let credential = credential(from: data) { return .found(credential, .keychain) }
+                keychain = .keychainDenied
+            case .absent:
+                break
+            case .refused:
+                keychain = .keychainDenied
+            }
+        } else {
+            switch inputs.probeKeychain() {
+            case .present: keychain = .keychainNotAllowed
+            case .unknown: keychain = .keychainDenied
+            case .absent: break
+            }
+        }
+
+        // A file that is missing or mid-rewrite must not wipe a token that was
+        // good a moment ago; the next tick reads it again.
+        if let lastGood, now.timeIntervalSince(lastGood.at) < graceLifetime,
+           !lastGood.credential.isExpired(now: now) {
+            return .found(lastGood.credential, .lastKnown)
+        }
+
+        if let keychain { return .missing(keychain) }
+        return .missing(fileProblem ? .fileUnreadable : .notSignedIn)
     }
 
-    // MARK: - Resolving
+    // MARK: - State
 
-    /// Claude Code reads both of these services.
-    private static let services = ["Claude Code-credentials", "Claude Code"]
+    /// UserDefaults key behind the "Allow Keychain Access" menu item. Off by
+    /// default.
+    static let keychainOptInKey = "allowKeychainAccess"
 
-    // Separate queues so a blocked attempt cannot stall the next one.
-    private static let frameworkQueue = DispatchQueue(label: "dev.notchstats.claude.kc", qos: .utility)
-    private static let cliQueue = DispatchQueue(label: "dev.notchstats.claude.cli", qos: .utility)
+    static var keychainAllowed: Bool {
+        UserDefaults.standard.bool(forKey: keychainOptInKey)
+    }
 
-    /// Seconds each `security` invocation may run before it is killed.
-    private static let cliTimeout: TimeInterval = 5
+    private static let lastGood = Locked<LastGood?>(nil)
+
+    /// Forgets the remembered credential (after a 401, a wake, or a manual
+    /// refresh), so the next resolve reads the sources again.
+    static func invalidate() { lastGood.withLock { $0 = nil } }
+
+    private static let queue = DispatchQueue(label: "dev.notchstats.claude.credentials", qos: .utility)
 
     static func resolveAsync(force: Bool = false) async -> Resolution {
         if force { invalidate() }
-        if let hit = state.withLock({ $0 }),
-           CachePolicy.isFresh(hit.resolution, age: Date().timeIntervalSince(hit.at)) {
-            return hit.resolution
+        let inputs = Inputs.live(keychainAllowed: keychainAllowed)
+        let previous = lastGood.withLock { $0 }
+        let resolution = await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: resolve(inputs, lastGood: previous)) }
         }
-
-        if let raw = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"],
-           !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            return .found(Credential(token: token, kind: .init(token: token), expiresAt: nil), .environment)
+        if case let .found(credential, source) = resolution, source != .lastKnown {
+            lastGood.withLock { $0 = LastGood(credential: credential, source: source, at: Date()) }
         }
-
-        var outcomes: [Outcome] = []
-
-        // Prefer the same lookup Claude Code performs: reading the keychain
-        // through the Security framework can trigger a "enter your login
-        // keychain password" dialog, which `security` avoids.
-        let cli = await readViaCLI()
-        if let credential = cli.credential { return remember(.found(credential, .securityCLI)) }
-        outcomes.append(cli.outcome)
-
-        if Task.isCancelled { return .missing(.keychainTimedOut) }
-
-        let framework = await readViaFramework()
-        if let credential = framework.credential { return remember(.found(credential, .keychain)) }
-        outcomes.append(framework.outcome)
-
-        if let data = fileData(), let credential = credential(from: data) {
-            return remember(.found(credential, .file))
-        }
-
-        return remember(.missing(failure(from: outcomes)))
+        return resolution
     }
 
-    // MARK: - Sources
-
-    private struct Read {
-        var credential: Credential?
-        var outcome: Outcome
-    }
-
-    /// Cancellation bridge: lets a cancelled task kill the `security` child
-    /// that its worker thread is waiting on, so nothing outlives the request.
-    private final class Job: @unchecked Sendable {
-        private let lock = NSLock()
-        private var process: Process?
-        private var cancelled = false
-
-        var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
-
-        func attach(_ process: Process) -> Bool {
-            lock.lock(); defer { lock.unlock() }
-            if cancelled { return false }
-            self.process = process
-            return true
+    /// The one place that may show a macOS password dialog: run when the user
+    /// turns "Allow Keychain Access" on. Background reads never prompt, so if
+    /// the user answers "Allow" rather than "Always Allow" the credential is
+    /// kept for a short while and then shows the "not readable" caption.
+    static func requestKeychainAccess() async {
+        let secret = await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: Keychain.readSecret(interaction: .allow)) }
         }
-
-        func cancel() {
-            lock.lock()
-            cancelled = true
-            let process = self.process
-            lock.unlock()
-            if let process, process.isRunning { process.terminate() }
+        if case let .found(data) = secret, let credential = credential(from: data) {
+            lastGood.withLock { $0 = LastGood(credential: credential, source: .keychain, at: Date()) }
         }
     }
 
-    private static func readViaCLI() async -> Read {
-        let job = Job()
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                cliQueue.async { continuation.resume(returning: cliCredential(job: job)) }
-            }
-        } onCancel: {
-            job.cancel()
-        }
-    }
+    // MARK: - Keychain and file access
 
-    /// Mirrors Claude Code's own lookup.
-    private static func cliCredential(job: Job) -> Read {
-        var outcome = Outcome.notFound
-        for service in services {
-            if job.isCancelled { return Read(credential: nil, outcome: .timedOut) }
-            let run = runSecurity(service: service, job: job)
-            switch run.status {
-            case .success:
-                if let raw = run.output, let credential = credential(from: Data(raw.utf8)) {
-                    return Read(credential: credential, outcome: .found)
+    private enum Keychain {
+        /// Claude Code stores its login under both of these services.
+        static let services = ["Claude Code-credentials", "Claude Code"]
+
+        enum Interaction { case fail, allow }
+
+        static func liveFileRead() -> FileRead {
+            let path = NSHomeDirectory() + "/.claude/.credentials.json"
+            guard FileManager.default.fileExists(atPath: path) else { return .absent }
+            guard let data = FileManager.default.contents(atPath: path), !data.isEmpty else { return .unreadable }
+            return .data(data)
+        }
+
+        /// Attributes only — no secret is requested, so this can never ask
+        /// for a password. `UIFail` also stops a locked keychain from showing
+        /// an unlock dialog.
+        static func probe() -> KeychainProbe {
+            var unknown = false
+            for service in services {
+                let query: [String: Any] = [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrService as String: service,
+                    kSecReturnAttributes as String: true,
+                    kSecMatchLimit as String: kSecMatchLimitOne,
+                    kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
+                ]
+                var item: CFTypeRef?
+                switch SecItemCopyMatching(query as CFDictionary, &item) {
+                case errSecSuccess: return .present
+                case errSecItemNotFound: continue
+                default: unknown = true
                 }
-            case .notFound:
-                break
-            case .denied:
-                outcome = .denied
-            case .timedOut:
-                if outcome != .denied { outcome = .timedOut }
             }
-        }
-        return Read(credential: nil, outcome: outcome)
-    }
-
-    private enum RunStatus { case success, notFound, denied, timedOut }
-
-    /// `errSecItemNotFound` surfaces from `security` as exit status 44.
-    static func status(forExit code: Int32) -> Outcome {
-        switch code {
-        case 0: return .found
-        case 44: return .notFound
-        default: return .denied
-        }
-    }
-
-    private static func runSecurity(service: String, job: Job) -> (status: RunStatus, output: String?) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["find-generic-password", "-a", NSUserName(), "-w", "-s", service]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-
-        guard job.attach(process) else { return (.timedOut, nil) }
-        do {
-            try process.run()
-        } catch {
-            return (.denied, nil)
+            return unknown ? .unknown : .absent
         }
 
-        if exited.wait(timeout: .now() + cliTimeout) == .timedOut {
-            // A keychain prompt is holding it. Kill it rather than leak the
-            // thread and the child.
-            process.terminate()
-            if exited.wait(timeout: .now() + 1) == .timedOut { kill(process.processIdentifier, SIGKILL) }
-            return (.timedOut, nil)
-        }
-
-        if job.isCancelled { return (.timedOut, nil) }
-
-        // The credential is a few hundred bytes — far below the pipe buffer —
-        // so reading after exit cannot deadlock.
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        switch status(forExit: process.terminationStatus) {
-        case .found:
-            let value = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            return value.isEmpty ? (.notFound, nil) : (.success, value)
-        case .notFound: return (.notFound, nil)
-        default: return (.denied, nil)
-        }
-    }
-
-    private static func readViaFramework() async -> Read {
-        await withCheckedContinuation { continuation in
-            frameworkQueue.async { continuation.resume(returning: frameworkCredential()) }
-        }
-    }
-
-    private static func frameworkCredential() -> Read {
-        var outcome = Outcome.notFound
-        for service in services {
-            let (data, status) = keychainData(service: service)
-            if let data, let credential = credential(from: data) {
-                return Read(credential: credential, outcome: .found)
+        /// Reads the secret. With `.fail` (every background read) macOS gets
+        /// no chance to prompt; `.allow` is only used for the user's one-off
+        /// grant.
+        static func readSecret(interaction: Interaction) -> KeychainSecret {
+            var refused = false
+            for service in services {
+                var query: [String: Any] = [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrService as String: service,
+                    kSecReturnData as String: true,
+                    kSecMatchLimit as String: kSecMatchLimitOne
+                ]
+                // Without the key macOS may prompt — that is `.allow`.
+                if interaction == .fail {
+                    query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+                }
+                var item: CFTypeRef?
+                switch SecItemCopyMatching(query as CFDictionary, &item) {
+                case errSecSuccess:
+                    if let data = item as? Data { return .found(data) }
+                case errSecItemNotFound:
+                    continue
+                default:
+                    refused = true
+                }
             }
-            if status == errSecAuthFailed || status == errSecInteractionNotAllowed
-                || status == errSecUserCanceled || status == errSecNotAvailable {
-                outcome = .denied
-            }
+            return refused ? .refused : .absent
         }
-        return Read(credential: nil, outcome: outcome)
-    }
-
-    private static func keychainData(service: String) -> (Data?, OSStatus) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            // Fail fast instead of blocking on an approval dialog; the call
-            // then needs no timeout and can never strand a thread.
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess else { return (nil, status) }
-        return (item as? Data, status)
-    }
-
-    private static func fileData() -> Data? {
-        FileManager.default.contents(atPath: NSHomeDirectory() + "/.claude/.credentials.json")
     }
 
     // MARK: - Parsing

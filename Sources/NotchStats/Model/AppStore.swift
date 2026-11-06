@@ -41,6 +41,21 @@ final class AppStore {
 
     private static let externalKey = "showOnExternalDisplays"
 
+    /// Let NotchStats read Claude's login from the keychain when the credentials
+    /// file has none. Off by default: turning it on is what lets macOS ask for
+    /// the login keychain password (once). With it off nothing here can prompt.
+    var allowKeychainAccess: Bool {
+        didSet {
+            guard allowKeychainAccess != oldValue else { return }
+            UserDefaults.standard.set(allowKeychainAccess, forKey: ClaudeCredentials.keychainOptInKey)
+            ClaudeCredentials.invalidate()
+            Task { @MainActor in
+                if allowKeychainAccess { await ClaudeCredentials.requestKeychainAccess() }
+                await refresh(force: true)
+            }
+        }
+    }
+
     private let engines: [UsageProvider] = [
         CodexProvider(),
         ClaudeProvider(),
@@ -58,6 +73,7 @@ final class AppStore {
 
     init() {
         showOnExternalDisplays = UserDefaults.standard.bool(forKey: Self.externalKey)
+        allowKeychainAccess = ClaudeCredentials.keychainAllowed
 
         // Test hook: NOTCHSTATS_STATE=collapsed|peek|expanded forces the initial state.
         switch ProcessInfo.processInfo.environment["NOTCHSTATS_STATE"] {

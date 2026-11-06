@@ -28,8 +28,12 @@ struct UsageMetric: Equatable, Sendable {
 enum ProviderIssue: Equatable, Sendable {
     /// No credential exists anywhere we look.
     case notSignedIn
-    /// The keychain refused or didn't answer.
+    /// The keychain is locked or refused a read we were allowed to try.
     case keychainDenied
+    /// A Claude login exists in the keychain, but "Allow Keychain Access" is off.
+    case keychainNotAllowed
+    /// A credentials file exists but can't be read yet (mid-rewrite).
+    case unreadable
     /// The token's own `expiresAt` is in the past.
     case tokenExpired
     /// The server answered 401 / 403 for a token that looked valid.
@@ -44,7 +48,8 @@ enum ProviderIssue: Equatable, Sendable {
     var shortLabel: String {
         switch self {
         case .notSignedIn: return "Sign in"
-        case .keychainDenied: return "Keychain"
+        case .keychainDenied, .keychainNotAllowed: return "Keychain"
+        case .unreadable: return "Retry"
         case .tokenExpired: return "Expired"
         case .rejected: return "Rejected"
         case .unreachable: return "Offline"
@@ -64,7 +69,7 @@ enum ProviderIssue: Equatable, Sendable {
     /// Keep showing the previous reading (marked stale) instead of an error.
     var isTransient: Bool {
         switch self {
-        case .unreachable, .rateLimited, .busy, .keychainDenied: return true
+        case .unreachable, .rateLimited, .busy, .keychainDenied, .keychainNotAllowed, .unreadable: return true
         default: return false
         }
     }
