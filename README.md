@@ -112,7 +112,7 @@ If a provider isn't set up, its row shows an actionable caption (for example
 | Provider | What you need first | Where NotchStats reads it |
 | --- | --- | --- |
 | **Codex / ChatGPT** | Sign in with the Codex CLI: `codex login` | `~/.codex/auth.json` |
-| **Claude** | Sign in with Claude Code: `claude` | macOS keychain (or `~/.claude/.credentials.json`) |
+| **Claude** | Sign in with Claude Code: `claude` | `~/.claude/.credentials.json` (the keychain only if you turn on **Allow Keychain Access**) |
 | **Anthropic API** | Add an Anthropic API key in OpenCode (`/connect` → **Anthropic**, or `opencode auth login`) | `opencode.db` → `credential` (key) + per-message `cost` |
 | **OpenCode Go** | Subscribe to Go, then `/connect` in OpenCode (or `opencode auth login`) and pick **OpenCode Go** | `~/.local/share/opencode/opencode.db` → `credential` |
 | **OpenRouter** | Add your OpenRouter key in OpenCode's auth | `~/.local/share/opencode/opencode.db` → `credential` |
@@ -129,12 +129,20 @@ you how to refresh it, not a blank row.
 **No special permissions.** The paths above are ordinary files in your home
 directory; macOS never asks for Full Disk Access or Accessibility.
 
-**Claude and the keychain.** NotchStats reads Claude's credential the same way
-Claude Code does — `/usr/bin/security find-generic-password` — falling back to
-the Security framework and then `~/.claude/.credentials.json`. The result is
-cached for a few minutes so it isn't re-read on every refresh. (Reading the
-keychain through the framework alone makes macOS ask for your login keychain
-password, which this order avoids.) If you sign in with an **API key** rather
+**Claude and the keychain.** NotchStats reads Claude's login from
+`~/.claude/.credentials.json` (or `CLAUDE_CODE_OAUTH_TOKEN`) — a plain file, so
+macOS never asks for a password. It does **not** use `security
+find-generic-password -w` or any other call that asks the keychain for the
+secret, because that is what makes macOS demand your login keychain password
+(and the grant is lost whenever the app is rebuilt). If the file is missing but
+the keychain holds a Claude login, the Claude row says *"Claude login found, not
+readable"* with a pointer to the menu. There, **Allow Keychain Access (asks for
+your password once)** — off by default, remembered in `UserDefaults` — lets
+NotchStats read the keychain item; macOS asks for your login password when you
+turn it on, so choose **Always Allow**. With it off, the only keychain call is
+an attributes-only check that an item exists, which cannot prompt. A missing or
+half-written file keeps the last good token for two minutes instead of dropping
+the row. If you sign in with an **API key** rather
 than a Pro/Max account, Anthropic reports that usage limits don't apply to API
 organisations — NotchStats shows that instead of inventing a number. When that
 key comes from OpenCode, a separate **Anthropic API** row totals your spend from
@@ -171,7 +179,7 @@ endpoints. Nothing is uploaded anywhere.
 | Widget | Source |
 | --- | --- |
 | Codex / ChatGPT limits | `~/.codex/auth.json` → `chatgpt.com/backend-api/wham/usage` |
-| Claude limits | keychain → `api.anthropic.com/api/oauth/usage` |
+| Claude limits | `~/.claude/.credentials.json` → `api.anthropic.com/api/oauth/usage` |
 | Anthropic API spend | `opencode.db` → `session_message` (`cost` on `anthropic` assistant messages) |
 | OpenCode Go limits | `opencode.db` credential → `opencode.ai/zen/go/v1/usage` |
 | OpenRouter credit | `opencode.db` credential → `openrouter.ai/api/v1/credits` |

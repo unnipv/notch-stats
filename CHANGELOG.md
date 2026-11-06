@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **NotchStats no longer asks for your keychain password.** The Claude lookup
+  used `security find-generic-password -w`, which requests the secret and makes
+  macOS prompt for the login password (the grant did not survive a rebuild).
+  That subprocess is gone: the credential now comes from
+  `CLAUDE_CODE_OAUTH_TOKEN`, then `~/.claude/.credentials.json`, then — only if
+  you turn on the new **Allow Keychain Access** menu item (off by default; macOS
+  asks for your password once) — the keychain. A Claude login the app isn't
+  allowed to read shows "Claude login found, not readable" with a menu hint
+  rather than "Not signed in", and a missing or half-written credentials file
+  keeps the last good token for two minutes. One process spawn per refresh is
+  gone too.
 - **The Claude login no longer "disappears".** A failed keychain read used to be
   cached as "no credentials" for five minutes; failures are now remembered for
   10 seconds, an expired token is never served from cache, and wake-from-sleep
