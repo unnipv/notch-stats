@@ -100,11 +100,11 @@ struct ClaudeProvider: UsageProvider {
         case .notSignedIn:
             return issue(.notSignedIn, "Not signed in to Claude", "Run `claude` to sign in")
         case .keychainNotAllowed:
-            return issue(.keychainNotAllowed, "Claude login found, not readable",
-                         "Menu bar ▸ Allow Keychain Access")
+            return issue(.keychainNotAllowed, "Claude login not shared — Capture in menu",
+                         "Menu bar ▸ Capture Claude login…")
         case .keychainDenied:
             return issue(.keychainDenied, "Keychain access denied",
-                         "Unlock the keychain, or re-enable it in the menu")
+                         "Menu bar ▸ Capture Claude login…")
         case .fileUnreadable:
             return issue(.unreadable, "Claude credentials unreadable", "File is being rewritten — retrying")
         }

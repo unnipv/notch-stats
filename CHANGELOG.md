@@ -2,12 +2,48 @@
 
 ## Unreleased
 
+- **Zero keychain password prompts during background polling.**
+  - Background polling (`AppStore` refresh → provider `fetch()`) now performs
+    **zero** Keychain secret reads (`kSecReturnData`). Plain CLI files
+    (`~/.claude/.credentials.json`, `~/.gemini/oauth_creds.json`) remain first
+    and unprompted; Keychain-only setups now use an explicit, user-initiated
+    **Capture Claude login…** / **Capture Gemini login…** menu action that reads
+    the Keychain once and writes a private `0600` snapshot under
+    `~/Library/Application Support/NotchStats/credentials/<provider>.json`
+    containing only `accessToken`, `expiresAt`, and `capturedAt`.
+  - Snapshots expire automatically when past `expiresAt` or older than the
+    provider's token lifetime (8h for Claude, 1h for Gemini) and can be deleted
+    at any time with **Forget Claude login** / **Forget Gemini login** without
+    touching `~/.claude/`, `~/.gemini/`, or any Keychain item.
+  - Restored `kSecUseAuthenticationUI = kSecUseAuthenticationUIFail` alongside
+    `LAContext.interactionNotAllowed = true` **and** wrapped every Keychain
+    call in `SecKeychainSetUserInteractionAllowed(false)` (`KeychainGuard`,
+    only toggled to `true` during an explicit menu-bar Capture click and
+    immediately restored): on macOS 27, neither `LAContext` nor `UIFail` alone
+    suppresses legacy `login.keychain-db` ACL password dialogs
+    (`AclValidationContext(action:24)`); `SecKeychainSetUserInteractionAllowed(false)`
+    makes `securityd` reject missing ACL grants silently (`errSecAuthFailed`)
+    with zero dialogs.
+  - Gated Gemini (`AntigravityCredentials`) behind the same
+    `allowKeychainAccess` opt-in as Claude: with the opt-in off, only an
+    attributes-only probe runs and the row shows *"Gemini login found, not
+    shared"* instead of reading secret bytes.
+  - When **Allow Keychain Access (read once at launch)** is on, NotchStats
+    attempts at most **one** non-interactive read at launch (or wake / manual
+    `⌘R`) and caches both successes and refusals for the session (no retry
+    storm).
+  - Added `scripts/make-signing-cert.sh` to create a persistent self-signed
+    code-signing certificate (`NotchStats Dev`) in the login Keychain, and
+    updated `build.sh` to sign with `NOTCHSTATS_SIGN_IDENTITY` or auto-detect
+    any `"NotchStats*"` identity before falling back to ad-hoc signing so
+    "Always Allow" grants survive rebuilds.
 - **Antigravity / Gemini limits.**
   - Added a read-only **Gemini** (`antigravity`) provider that reads your local
     Antigravity (`agy`) / Gemini login without ever modifying, refreshing, or
-    prompting for Keychain passwords (`JETSKI_OAUTH_TOKEN`, then `agy`'s macOS
-    Keychain item `gemini` / `antigravity` via non-interactive `LAContext`, then
-    `~/.gemini/oauth_creds.json`, preferring any unexpired token).
+    prompting for Keychain passwords (`JETSKI_OAUTH_TOKEN`, then
+    `~/.gemini/oauth_creds.json`, then an app-private `0600` captured snapshot,
+    then — only if opted in and once at launch — `agy`'s macOS Keychain item
+    `gemini` / `antigravity` via `UIFail` + `LAContext`).
   - Calls `daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` once per
     launch (cached for plan tier and project) and
     `/v1internal:retrieveUserQuota` once per existing ~60s poll tick — showing

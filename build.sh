@@ -33,7 +33,27 @@ if [ -f "$ROOT/Resources/AppIcon.icns" ]; then
   cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 fi
 
-echo "==> Signing (ad-hoc)"
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "codesign skipped"
+# Signing precedence:
+#   1. NOTCHSTATS_SIGN_IDENTITY when explicitly set,
+#   2. Any valid code-signing certificate whose CN starts with "NotchStats"
+#      (e.g. "NotchStats Dev" created by scripts/make-signing-cert.sh),
+#   3. Ad-hoc signing (-) fallback. Never fails the build if no identity exists.
+SIGN_IDENTITY="${NOTCHSTATS_SIGN_IDENTITY:-}"
+if [ -z "$SIGN_IDENTITY" ] && command -v security >/dev/null 2>&1; then
+  SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+    | sed -n 's/.*"\(NotchStats[^"]*\)".*/\1/p' \
+    | head -1 || true)"
+fi
+
+if [ -n "$SIGN_IDENTITY" ]; then
+  echo "==> Signing with identity: $SIGN_IDENTITY"
+  if ! codesign --force --deep --sign "$SIGN_IDENTITY" "$APP"; then
+    echo "!! Signing with '$SIGN_IDENTITY' failed; falling back to ad-hoc" >&2
+    codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "codesign skipped"
+  fi
+else
+  echo "==> Signing (ad-hoc)"
+  codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "codesign skipped"
+fi
 
 echo "==> Built $APP"

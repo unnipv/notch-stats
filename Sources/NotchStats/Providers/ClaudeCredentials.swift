@@ -3,28 +3,32 @@ import LocalAuthentication
 import Security
 
 /// Finds the credential Claude Code already wrote, without ever modifying it
-/// and — unless the user opted in — without ever being able to make macOS ask
-/// for a password.
+/// and without ever performing a Keychain secret read during background polls.
 ///
-/// Sources, tried in order:
-/// 1. the `CLAUDE_CODE_OAUTH_TOKEN` environment variable,
-/// 2. `~/.claude/.credentials.json` — a plain file, no keychain involved,
-/// 3. the login keychain, **only** when "Allow Keychain Access" is on.
+/// Sources, tried in order on every poll (zero `kSecReturnData` calls):
+/// 1. `CLAUDE_CODE_OAUTH_TOKEN` environment variable,
+/// 2. `~/.claude/.credentials.json` (honouring `CLAUDE_CONFIG_DIR`) — plain file,
+/// 3. App-private `0600` snapshot under
+///    `~/Library/Application Support/NotchStats/credentials/claude.json`
+///    (written only when the user clicks "Capture Claude login…"),
+/// 4. In-memory session cache populated only once at launch (if "Allow Keychain
+///    Access" is on) or by an explicit user action / wake-from-sleep.
 ///
-/// With the opt-in off the keychain is only ever *probed* for the existence of
-/// an item (attributes, never the secret), and that probe is configured to
-/// fail instead of showing a dialog. Every keychain call that can return the
-/// secret also fails rather than prompts, except the single one the user
-/// triggers by turning the opt-in on (`requestKeychainAccess`).
+/// Every non-interactive Keychain query sets **both**
+/// `kSecUseAuthenticationUI = kSecUseAuthenticationUIFail` and an `LAContext`
+/// with `interactionNotAllowed = true`. `UIFail` is what suppresses the legacy
+/// login-keychain ACL dialog (`AclValidationContext(action:24)`); `LAContext`
+/// alone does not.
 ///
 /// Two kinds of credential turn up in practice and they behave differently: an
 /// **OAuth token** (`sk-ant-oat…`, Pro/Max login) can report usage limits, while
 /// an **API key** (`sk-ant-api…`) belongs to an API organisation, where
 /// Anthropic reports that usage limits do not apply.
 ///
-/// Strictly read-only: nothing here writes, refreshes or deletes a credential.
+/// Strictly read-only on Claude Code's own files and Keychain items: nothing
+/// here writes, refreshes, or deletes another app's credential.
 enum ClaudeCredentials {
-    enum Kind {
+    enum Kind: Equatable, Sendable {
         case oauth
         case apiKey
 
@@ -33,7 +37,7 @@ enum ClaudeCredentials {
         }
     }
 
-    struct Credential: Equatable {
+    struct Credential: Equatable, Sendable {
         let token: String
         let kind: Kind
         let expiresAt: Date?
@@ -44,9 +48,10 @@ enum ClaudeCredentials {
         }
     }
 
-    enum Source: String {
+    enum Source: String, Equatable, Sendable {
         case environment = "environment"
         case file = "credentials file"
+        case snapshot = "captured snapshot"
         case keychain = "keychain"
         /// The last good credential, kept briefly while the file is missing or
         /// being rewritten.
@@ -55,12 +60,12 @@ enum ClaudeCredentials {
 
     /// Why nothing was found. Kept apart so a *failed read* is never reported
     /// as a *missing login*.
-    enum Failure: Equatable {
+    enum Failure: Equatable, Sendable {
         /// Every place we may look answered "nothing here".
         case notSignedIn
-        /// The keychain holds a Claude login, but the opt-in is off.
+        /// The keychain holds a Claude login, but it has not been captured/shared.
         case keychainNotAllowed
-        /// The keychain is locked or refused a read we were allowed to try.
+        /// The keychain is locked or refused a non-interactive read.
         case keychainDenied
         /// The credentials file is there but cannot be read yet — usually the
         /// CLI is rewriting it.
@@ -76,55 +81,81 @@ enum ClaudeCredentials {
         }
     }
 
-    enum Resolution: Equatable {
+    enum Resolution: Equatable, Sendable {
         case found(Credential, Source)
         case missing(Failure)
     }
 
     // MARK: - Seam
 
-    enum FileRead: Equatable {
+    enum FileRead: Equatable, Sendable {
         case absent
         case unreadable
         case data(Data)
     }
 
     /// Answer to "is there a Claude item in the keychain?" — attributes only.
-    enum KeychainProbe: Equatable {
+    enum KeychainProbe: Equatable, Sendable {
         case present
         case absent
         /// Locked, or the call failed: we can't tell.
         case unknown
     }
 
-    /// Answer to a secret read that was not allowed to prompt.
-    enum KeychainSecret: Equatable {
+    /// Answer to a secret read from the keychain.
+    enum KeychainSecret: Equatable, Sendable {
         case found(Data)
         case absent
         /// The item exists (or the keychain is locked) and we may not read it.
         case refused
     }
 
-    /// Everything resolution consults, so the order is testable without
-    /// touching the real keychain or the real home directory.
+    /// Cached outcome of the process's one-off keychain read (launch, wake, or
+    /// explicit capture). Passed as a plain value into `resolve(_:)` so the
+    /// background poll path can never invoke `SecItemCopyMatching` with
+    /// `kSecReturnData`.
+    enum KeychainSessionState: Equatable, Sendable {
+        case unattempted
+        case credential(Credential)
+        case cleared
+        case malformed
+        case absent
+        case refused
+    }
+
+    enum CaptureResult: Equatable, Sendable {
+        case captured(Credential)
+        case absent
+        case cleared
+        case refused
+        case malformed
+        case writeFailed
+    }
+
+    /// Everything background resolution consults. Deliberately carries NO
+    /// secret-reading closure: background polling performs zero keychain reads.
     struct Inputs {
         var environment: [String: String]
         var readFile: () -> FileRead
+        var readSnapshot: () -> CredentialSnapshotStore.ReadResult
         var keychainAllowed: Bool
+        var sessionKeychain: KeychainSessionState
         var probeKeychain: () -> KeychainProbe
-        var readKeychain: () -> KeychainSecret
 
-        static func live(keychainAllowed: Bool) -> Inputs {
+        static func live(keychainAllowed: Bool,
+                         sessionKeychain: KeychainSessionState,
+                         snapshotDirectory: URL = CredentialSnapshotStore.defaultDirectory()) -> Inputs {
             let env = ProcessInfo.processInfo.environment
             return Inputs(environment: env,
                           readFile: { Keychain.liveFileRead(environment: env) },
+                          readSnapshot: { CredentialSnapshotStore.read(provider: .claude, directory: snapshotDirectory) },
                           keychainAllowed: keychainAllowed,
-                          probeKeychain: { Keychain.probe() },
-                          readKeychain: { Keychain.readSecret(interaction: .fail) })
+                          sessionKeychain: sessionKeychain,
+                          probeKeychain: { Keychain.probe() })
         }
     }
 
-    struct LastGood: Equatable {
+    struct LastGood: Equatable, Sendable {
         let credential: Credential
         let source: Source
         let at: Date
@@ -134,7 +165,7 @@ enum ClaudeCredentials {
     /// Kept separate from `Credential?` so an explicitly cleared login
     /// (`{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}`)
     /// is never mistaken for a half-written file or a denied keychain read.
-    enum ParseResult: Equatable {
+    enum ParseResult: Equatable, Sendable {
         case credential(Credential)
         /// Valid JSON whose `claudeAiOauth` object explicitly has an empty token
         /// (the shape Claude Code writes when clearing a dead/signed-out grant).
@@ -146,9 +177,7 @@ enum ClaudeCredentials {
     /// How long a good credential outlives a missing or half-written file.
     static let graceLifetime: TimeInterval = 120
 
-    /// Pure resolution. The keychain is not consulted unless `keychainAllowed`
-    /// — apart from the attribute-only probe that makes a missing login and an
-    /// unreadable one look different.
+    /// Pure resolution. Never performs a Keychain secret read (`kSecReturnData`).
     static func resolve(_ inputs: Inputs, lastGood: LastGood?, now: Date = Date()) -> Resolution {
         if let raw = inputs.environment["CLAUDE_CODE_OAUTH_TOKEN"] {
             let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -171,8 +200,8 @@ enum ClaudeCredentials {
                 if !credential.isExpired(now: now) {
                     return .found(credential, .file)
                 }
-                // File token is expired. If the keychain is opted in, check
-                // whether a fresher token lives there before declaring expiry.
+                // File token is expired. Check snapshot or cached keychain
+                // token before declaring expiry.
                 expiredFileCredential = credential
             case .cleared:
                 fileCleared = true
@@ -182,29 +211,35 @@ enum ClaudeCredentials {
             }
         }
 
+        // App-private 0600 snapshot captured explicitly by the user.
+        if case let .valid(snapshot) = inputs.readSnapshot() {
+            let credential = Credential(token: snapshot.accessToken,
+                                        kind: .init(token: snapshot.accessToken),
+                                        expiresAt: snapshot.expiresAtDate)
+            if !credential.isExpired(now: now) {
+                return .found(credential, .snapshot)
+            }
+        }
+
+        // Consult the in-memory session keychain cache (populated once at
+        // launch/wake when opted in, or via explicit Capture) — never reads
+        // keychain secret bytes on poll ticks.
         var keychain: Failure?
         var keychainCleared = false
         var expiredKeychainCredential: Credential?
-        if inputs.keychainAllowed {
-            switch inputs.readKeychain() {
-            case let .found(data):
-                switch parseCredential(from: data) {
-                case let .credential(credential):
-                    if !credential.isExpired(now: now) {
-                        return .found(credential, .keychain)
-                    }
-                    expiredKeychainCredential = credential
-                case .cleared:
-                    keychainCleared = true
-                case .malformed:
-                    keychain = .keychainDenied
-                }
-            case .absent:
-                break
-            case .refused:
-                keychain = .keychainDenied
+        switch inputs.sessionKeychain {
+        case let .credential(credential):
+            if !credential.isExpired(now: now) {
+                return .found(credential, .keychain)
             }
-        } else if expiredFileCredential == nil {
+            expiredKeychainCredential = credential
+        case .cleared:
+            keychainCleared = true
+        case .malformed, .refused:
+            keychain = .keychainDenied
+        case .absent:
+            break
+        case .unattempted:
             switch inputs.probeKeychain() {
             case .present: keychain = .keychainNotAllowed
             case .unknown: keychain = .keychainDenied
@@ -212,9 +247,10 @@ enum ClaudeCredentials {
             }
         }
 
-        // No live (unexpired) token was found; if one or both sources had an
-        // expired token, report the most recent one rather than "not signed in".
-        if let chosen = fresherExpired(file: expiredFileCredential, keychain: expiredKeychainCredential) {
+        // If no unshared/denied keychain login is waiting to be shared and at
+        // least one source had an expired token, surface the fresher expiry.
+        if keychain == nil,
+           let chosen = fresherExpired(file: expiredFileCredential, keychain: expiredKeychainCredential) {
             return .found(chosen.credential, chosen.source)
         }
 
@@ -252,7 +288,7 @@ enum ClaudeCredentials {
     // MARK: - State
 
     /// UserDefaults key behind the "Allow Keychain Access" menu item. Off by
-    /// default.
+    /// default. Shared with `AntigravityCredentials`.
     static let keychainOptInKey = "allowKeychainAccess"
 
     static var keychainAllowed: Bool {
@@ -260,16 +296,36 @@ enum ClaudeCredentials {
     }
 
     private static let lastGood = Locked<LastGood?>(nil)
+    private static let sessionKeychain = Locked<KeychainSessionState>(.unattempted)
 
-    /// Forgets the remembered credential (after a 401, a wake, or a manual
-    /// refresh), so the next resolve reads the sources again.
+    static var currentSessionState: KeychainSessionState {
+        sessionKeychain.withLock { $0 }
+    }
+
+    /// Forgets the short-lived `lastGood` grace token (e.g. after HTTP 401 so
+    /// file/snapshot sources are re-checked) WITHOUT resetting the keychain
+    /// session cache — a background 401 never triggers a keychain read.
     static func invalidate() { lastGood.withLock { $0 = nil } }
+
+    /// Clears both `lastGood` and the session keychain cache. Called only on
+    /// wake-from-sleep or explicit user actions (Refresh Now, opt-in toggle,
+    /// Forget).
+    static func resetKeychainSession() {
+        lastGood.withLock { $0 = nil }
+        sessionKeychain.withLock { $0 = .unattempted }
+    }
 
     private static let queue = DispatchQueue(label: "dev.notchstats.claude.credentials", qos: .utility)
 
-    static func resolveAsync(force: Bool = false) async -> Resolution {
+    /// Background-safe resolution called by `ClaudeProvider.fetch()`. Performs
+    /// zero `kSecReturnData` keychain calls.
+    static func resolveAsync(force: Bool = false,
+                             snapshotDirectory: URL = CredentialSnapshotStore.defaultDirectory()) async -> Resolution {
         if force { invalidate() }
-        let inputs = Inputs.live(keychainAllowed: keychainAllowed)
+        let cachedKeychain = sessionKeychain.withLock { $0 }
+        let inputs = Inputs.live(keychainAllowed: keychainAllowed,
+                                 sessionKeychain: cachedKeychain,
+                                 snapshotDirectory: snapshotDirectory)
         let previous = lastGood.withLock { $0 }
         let resolution = await withCheckedContinuation { continuation in
             queue.async { continuation.resume(returning: resolve(inputs, lastGood: previous)) }
@@ -281,16 +337,136 @@ enum ClaudeCredentials {
         return resolution
     }
 
-    /// The one place that may show a macOS password dialog: run when the user
-    /// turns "Allow Keychain Access" on. Background reads never prompt, so if
-    /// the user answers "Allow" rather than "Always Allow" the credential is
-    /// kept for a short while and then shows the "not readable" caption.
-    static func requestKeychainAccess() async {
-        let secret = await withCheckedContinuation { continuation in
-            queue.async { continuation.resume(returning: Keychain.readSecret(interaction: .allow)) }
+    /// Performs at most **one** non-interactive (`UIFail` + `LAContext`)
+    /// Keychain secret read for the current session, and only when:
+    /// - `keychainAllowed` is `true`,
+    /// - no launch/session read has been attempted yet, and
+    /// - neither env, plain file, nor a valid `0600` snapshot already holds an
+    ///   unexpired token.
+    ///
+    /// A failed or denied read is remembered as `.refused` for the rest of the
+    /// session so there is never a retry storm.
+    static func warmFromKeychainIfAllowed(
+        keychainAllowed allowed: Bool = keychainAllowed,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        readFile: @escaping @Sendable () -> FileRead = { Keychain.liveFileRead() },
+        snapshotDirectory: URL = CredentialSnapshotStore.defaultDirectory(),
+        readSecret: @escaping @Sendable () -> KeychainSecret = { Keychain.readSecret(interaction: .fail) },
+        now: Date = Date()
+    ) async {
+        guard allowed else { return }
+        guard sessionKeychain.withLock({ $0 == .unattempted }) else { return }
+
+        // If env, plain file, or a valid 0600 snapshot already has a live
+        // credential, skip the keychain completely.
+        if hasLiveNonKeychainToken(environment: environment,
+                                   readFile: readFile,
+                                   snapshotDirectory: snapshotDirectory,
+                                   now: now) {
+            return
         }
-        if case let .found(data) = secret, let credential = credential(from: data) {
-            lastGood.withLock { $0 = LastGood(credential: credential, source: .keychain, at: Date()) }
+
+        let state: KeychainSessionState = await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: sessionState(from: readSecret()))
+            }
+        }
+        sessionKeychain.withLock { $0 = state }
+        if case let .credential(cred) = state, !cred.isExpired(now: now) {
+            lastGood.withLock { $0 = LastGood(credential: cred, source: .keychain, at: now) }
+        }
+    }
+
+    /// Explicit user-initiated capture ("Capture Claude login…" in the menu
+    /// bar). This is the **only** Claude code path that may show a macOS
+    /// Keychain password dialog. On success, writes an app-private `0600`
+    /// snapshot file so every subsequent poll reads that file instead of the
+    /// Keychain.
+    @discardableResult
+    static func captureFromKeychain(
+        snapshotDirectory: URL = CredentialSnapshotStore.defaultDirectory(),
+        readSecret: @escaping @Sendable () -> KeychainSecret = { Keychain.readSecret(interaction: .allow) },
+        now: Date = Date()
+    ) async -> CaptureResult {
+        let secret: KeychainSecret = await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: readSecret()) }
+        }
+        switch secret {
+        case let .found(data):
+            switch parseCredential(from: data) {
+            case let .credential(cred):
+                do {
+                    try CredentialSnapshotStore.write(provider: .claude,
+                                                      accessToken: cred.token,
+                                                      expiresAt: cred.expiresAt,
+                                                      capturedAt: now,
+                                                      directory: snapshotDirectory)
+                } catch {
+                    sessionKeychain.withLock { $0 = .credential(cred) }
+                    return .writeFailed
+                }
+                sessionKeychain.withLock { $0 = .credential(cred) }
+                if !cred.isExpired(now: now) {
+                    lastGood.withLock { $0 = LastGood(credential: cred, source: .snapshot, at: now) }
+                }
+                return .captured(cred)
+            case .cleared:
+                sessionKeychain.withLock { $0 = .cleared }
+                return .cleared
+            case .malformed:
+                sessionKeychain.withLock { $0 = .malformed }
+                return .malformed
+            }
+        case .absent:
+            sessionKeychain.withLock { $0 = .absent }
+            return .absent
+        case .refused:
+            sessionKeychain.withLock { $0 = .refused }
+            return .refused
+        }
+    }
+
+    /// Deletes only NotchStats's own `0600` Claude snapshot file and forgets
+    /// the in-memory session cache. Never touches `~/.claude/` or the Keychain.
+    static func forgetSnapshot(snapshotDirectory: URL = CredentialSnapshotStore.defaultDirectory()) {
+        CredentialSnapshotStore.delete(provider: .claude, directory: snapshotDirectory)
+        resetKeychainSession()
+    }
+
+    private static func hasLiveNonKeychainToken(environment: [String: String],
+                                                readFile: () -> FileRead,
+                                                snapshotDirectory: URL,
+                                                now: Date) -> Bool {
+        if let raw = environment["CLAUDE_CODE_OAUTH_TOKEN"],
+           !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        if case let .data(data) = readFile(),
+           case let .credential(cred) = parseCredential(from: data),
+           !cred.isExpired(now: now) {
+            return true
+        }
+        if case let .valid(snap) = CredentialSnapshotStore.read(provider: .claude,
+                                                                directory: snapshotDirectory,
+                                                                now: now) {
+            let cred = Credential(token: snap.accessToken,
+                                  kind: .init(token: snap.accessToken),
+                                  expiresAt: snap.expiresAtDate)
+            if !cred.isExpired(now: now) { return true }
+        }
+        return false
+    }
+
+    private static func sessionState(from secret: KeychainSecret) -> KeychainSessionState {
+        switch secret {
+        case let .found(data):
+            switch parseCredential(from: data) {
+            case let .credential(cred): return .credential(cred)
+            case .cleared: return .cleared
+            case .malformed: return .malformed
+            }
+        case .absent: return .absent
+        case .refused: return .refused
         }
     }
 
@@ -328,8 +504,13 @@ enum ClaudeCredentials {
         }
 
         /// Builds the attributes-only existence query. Never sets
-        /// `kSecReturnData` and attaches a non-interactive `LAContext` so
-        /// macOS can never show a password or unlock dialog.
+        /// `kSecReturnData` and sets **both** `kSecUseAuthenticationUIFail` and
+        /// a non-interactive `LAContext` so macOS can never show a password or
+        /// unlock dialog.
+        ///
+        /// Note: `kSecUseAuthenticationUI = kSecUseAuthenticationUIFail` (not
+        /// `LAContext.interactionNotAllowed`) is what suppresses the legacy
+        /// file-based login-keychain ACL prompt (`AclValidationContext`).
         static func probeQuery(service: String) -> [String: Any] {
             let context = LAContext()
             context.interactionNotAllowed = true
@@ -338,14 +519,23 @@ enum ClaudeCredentials {
                 kSecAttrService as String: service,
                 kSecReturnAttributes as String: true,
                 kSecMatchLimit as String: kSecMatchLimitOne,
+                kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail,
                 kSecUseAuthenticationContext as String: context
             ]
         }
 
-        /// Builds the secret-read query. `.fail` (every background read)
-        /// attaches a non-interactive `LAContext`; `.allow` is only used for
-        /// the user's one-off opt-in click.
-        static func secretQuery(service: String, interaction: Interaction) -> [String: Any] {
+        /// Builds the secret-read query.
+        ///
+        /// `.fail` (default — every non-interactive / launch / wake read) sets
+        /// **both** `kSecUseAuthenticationUI = kSecUseAuthenticationUIFail` and
+        /// `LAContext.interactionNotAllowed = true`. `UIFail` — not `LAContext`
+        /// — is what suppresses macOS's legacy login-keychain ACL dialog
+        /// (`AclValidationContext(action:24)`) and turns a would-be password
+        /// prompt into an immediate `errSecInteractionNotAllowed` error.
+        ///
+        /// `.allow` is used exclusively by the user-initiated "Capture Claude
+        /// login…" menu action.
+        static func secretQuery(service: String, interaction: Interaction = .fail) -> [String: Any] {
             var query: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: service,
@@ -355,45 +545,54 @@ enum ClaudeCredentials {
             if interaction == .fail {
                 let context = LAContext()
                 context.interactionNotAllowed = true
+                // UIFail (not LAContext alone) is required to suppress legacy
+                // login-keychain ACL password dialogs in securityd.
+                query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
                 query[kSecUseAuthenticationContext as String] = context
             }
             return query
         }
 
         /// Attributes only — no secret is requested, so this can never ask
-        /// for a password. `interactionNotAllowed` also stops a locked keychain
-        /// from showing an unlock dialog.
+        /// for a password. Both `UIFail`, `interactionNotAllowed`, and
+        /// `SecKeychainSetUserInteractionAllowed(false)` also stop a locked
+        /// keychain from showing an unlock dialog.
         static func probe() -> KeychainProbe {
-            var unknown = false
-            for service in services {
-                var item: CFTypeRef?
-                switch SecItemCopyMatching(probeQuery(service: service) as CFDictionary, &item) {
-                case errSecSuccess: return .present
-                case errSecItemNotFound: continue
-                default: unknown = true
+            KeychainGuard.withInteraction(allowed: false) {
+                var unknown = false
+                for service in services {
+                    var item: CFTypeRef?
+                    switch SecItemCopyMatching(probeQuery(service: service) as CFDictionary, &item) {
+                    case errSecSuccess: return .present
+                    case errSecItemNotFound: continue
+                    default: unknown = true
+                    }
                 }
+                return unknown ? .unknown : .absent
             }
-            return unknown ? .unknown : .absent
         }
 
-        /// Reads the secret. With `.fail` (every background read) macOS gets
-        /// no chance to prompt; `.allow` is only used for the user's one-off
-        /// grant.
-        static func readSecret(interaction: Interaction) -> KeychainSecret {
-            var refused = false
-            for service in services {
-                var item: CFTypeRef?
-                switch SecItemCopyMatching(secretQuery(service: service, interaction: interaction) as CFDictionary, &item) {
-                case errSecSuccess:
-                    if let data = item as? Data { return .found(data) }
-                    refused = true
-                case errSecItemNotFound:
-                    continue
-                default:
-                    refused = true
+        /// Reads the secret. With `.fail` (default), `KeychainGuard` sets
+        /// `SecKeychainSetUserInteractionAllowed(false)` alongside `UIFail` and
+        /// `LAContext.interactionNotAllowed = true` so macOS gets no chance to
+        /// prompt; `.allow` is only used for the user's explicit Capture click.
+        static func readSecret(interaction: Interaction = .fail) -> KeychainSecret {
+            KeychainGuard.withInteraction(allowed: interaction == .allow) {
+                var refused = false
+                for service in services {
+                    var item: CFTypeRef?
+                    switch SecItemCopyMatching(secretQuery(service: service, interaction: interaction) as CFDictionary, &item) {
+                    case errSecSuccess:
+                        if let data = item as? Data { return .found(data) }
+                        refused = true
+                    case errSecItemNotFound:
+                        continue
+                    default:
+                        refused = true
+                    }
                 }
+                return refused ? .refused : .absent
             }
-            return refused ? .refused : .absent
         }
     }
 
