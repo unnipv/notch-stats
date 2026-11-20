@@ -59,9 +59,17 @@ final class PanelSizingTests: XCTestCase {
         XCTAssertEqual(ProviderRow.planLabel(for: codexWithoutReset), "Plus plan")
         XCTAssertNil(ProviderRow.detail(for: codexWithoutReset.windows[0], in: codexWithoutReset, now: now))
 
+        // Gemini's tier note belongs under the provider name, not duplicated in a window header.
+        let gemini = ProviderUsage(
+            id: AntigravityProvider.id, name: "Gemini", accentHex: AntigravityProvider.accent, order: 2,
+            windows: [UsageWindow(id: "gemini", label: "Gemini", percent: 0.08, resetsAt: nil)],
+            note: "Google AI Pro", error: nil)
+        XCTAssertEqual(ProviderRow.planLabel(for: gemini), "Google AI Pro")
+        XCTAssertNil(ProviderRow.detail(for: gemini.windows[0], in: gemini, now: now))
+
         // OpenRouter's dollar balance still belongs in the single-window detail slot.
         let openRouter = ProviderUsage(
-            id: OpenRouterProvider.id, name: "OpenRouter", accentHex: OpenRouterProvider.accent, order: 4,
+            id: OpenRouterProvider.id, name: "OpenRouter", accentHex: OpenRouterProvider.accent, order: 5,
             windows: [UsageWindow(id: "credits", label: "Credits", percent: 0.5, resetsAt: nil)],
             note: "$3.26", error: nil)
         XCTAssertNil(ProviderRow.planLabel(for: openRouter))
@@ -69,12 +77,18 @@ final class PanelSizingTests: XCTestCase {
                        .text("$3.26"))
     }
 
-    func testBarPartitionHandlesSingleLeftEntryCleanly() {
+    func testBarPartitionHandlesSingleLeftEntryAndCodexPlusGeminiCleanly() {
         let codex = BarEntry(
             provider: ProviderUsage(
                 id: CodexProvider.id, name: "Codex", accentHex: CodexProvider.accent, order: 0,
                 windows: [UsageWindow(id: "5h", label: "5h", percent: 0.2, resetsAt: nil)],
                 note: "Plus plan", error: nil),
+            live: false)
+        let gemini = BarEntry(
+            provider: ProviderUsage(
+                id: AntigravityProvider.id, name: "Gemini", accentHex: AntigravityProvider.accent, order: 2,
+                windows: [UsageWindow(id: "gemini", label: "Gemini", percent: 0.08, resetsAt: nil)],
+                note: "Google AI Pro", error: nil),
             live: false)
         let claude = BarEntry(
             provider: ProviderUsage(
@@ -83,9 +97,13 @@ final class PanelSizingTests: XCTestCase {
                 note: "Max", error: nil),
             live: false)
 
-        let ears = BarLayout.partition([codex, claude])
-        XCTAssertEqual(ears.left.map(\.id), [CodexProvider.id])
-        XCTAssertEqual(ears.right.map(\.id), [ClaudeProvider.id])
+        let singleLeft = BarLayout.partition([codex, claude])
+        XCTAssertEqual(singleLeft.left.map(\.id), [CodexProvider.id])
+        XCTAssertEqual(singleLeft.right.map(\.id), [ClaudeProvider.id])
+
+        let withGemini = BarLayout.partition([codex, gemini, claude])
+        XCTAssertEqual(withGemini.left.map(\.id), [CodexProvider.id, AntigravityProvider.id])
+        XCTAssertEqual(withGemini.right.map(\.id), [ClaudeProvider.id])
 
         let empty = BarLayout.partition([])
         XCTAssertTrue(empty.left.isEmpty)

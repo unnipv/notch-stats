@@ -9,8 +9,8 @@ struct UsageList: View {
                 symbol: store.lastRefresh == nil ? "circle.dotted" : "person.crop.circle.badge.questionmark",
                 title: store.lastRefresh == nil ? "Loading usage…" : "No providers found",
                 detail: store.lastRefresh == nil
-                    ? "Reading your Claude, Codex and OpenCode logins"
-                    : "Sign in to Claude Code, Codex or OpenCode to see limits here")
+                    ? "Reading your Claude, Codex, Gemini and OpenCode logins"
+                    : "Sign in to Claude Code, Codex, Gemini or OpenCode to see limits here")
         } else {
             VStack(spacing: AppStore.rowSpacing) {
                 ForEach(store.providers) { provider in
@@ -131,7 +131,10 @@ struct ProviderRow: View {
 
     static func planLabel(for provider: ProviderUsage) -> String? {
         guard provider.error == nil, !provider.windows.isEmpty else { return nil }
-        return provider.note.flatMap { $0.hasSuffix("plan") || provider.id == ClaudeProvider.id ? $0 : nil }
+        return provider.note.flatMap {
+            $0.hasSuffix("plan") || provider.id == ClaudeProvider.id || provider.id == AntigravityProvider.id
+                ? $0 : nil
+        }
     }
 
     private func detail(for window: UsageWindow) -> WindowFigure.Detail? {

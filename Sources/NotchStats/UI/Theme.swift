@@ -6,13 +6,14 @@ import SwiftUI
 /// whites, and every spacing value is on a 4 pt grid.
 enum Theme {
     static let codex = Color(hex: "#10A37F")
+    static let gemini = Color(hex: "#4285F4")
     static let opencode = Color(hex: "#B47BFF")
     static let openrouter = Color(hex: "#7E8BF5")
     static let live = Color(hex: "#34C759")
 
     // Warnings own two hues no provider accent can produce (accents are green,
-    // terracotta, purple and indigo), and in the panel they always come with a
-    // glyph as well, so colour never has to carry the meaning alone.
+    // terracotta, blue, purple and indigo), and in the panel they always come
+    // with a glyph as well, so colour never has to carry the meaning alone.
     static let warn = Color(hex: "#FFD60A")
     static let crit = Color(hex: "#FF3B6B")
 

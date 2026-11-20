@@ -5,7 +5,7 @@ struct OpenRouterProvider: UsageProvider {
     static let id = "openrouter"
     static let name = "OpenRouter"
     static let accent = "#7E8BF5"
-    static let order = 4
+    static let order = 5
 
     var id: String { Self.id }
     var name: String { Self.name }

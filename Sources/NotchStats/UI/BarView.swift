@@ -18,7 +18,7 @@ struct BarEntry: Identifiable {
 
 /// Partitioning of bar entries between the left and right notch ears.
 enum BarLayout {
-    static let leftIDs: Set<String> = [CodexProvider.id]
+    static let leftIDs: Set<String> = [CodexProvider.id, AntigravityProvider.id]
 
     static func partition(_ entries: [BarEntry],
                           leftIDs: Set<String> = leftIDs) -> (left: [BarEntry], right: [BarEntry]) {
@@ -32,11 +32,12 @@ struct BarView: View {
     let geometry: IslandGeometry
     var detailed: Bool
 
-    /// Codex sits in the left ear; Claude and OpenCode Go share the right one.
-    /// A provider with an error keeps its slot (as a warning) rather than
-    /// silently disappearing.
+    /// Codex and Gemini share the left ear; Claude and OpenCode Go share the
+    /// right one. A provider with an error keeps its slot (as a warning) rather
+    /// than silently disappearing.
     private var entries: [BarEntry] {
         [(CodexProvider.id, AgentKind.codex as AgentKind?),
+         (AntigravityProvider.id, nil),
          (ClaudeProvider.id, AgentKind.claude),
          (OpenCodeGoProvider.id, AgentKind.opencode)]
             .compactMap { id, kind in

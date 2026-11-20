@@ -9,7 +9,7 @@ struct OpenCodeGoProvider: UsageProvider {
     static let id = "opencode"
     static let name = "OpenCode Go"
     static let accent = "#B47BFF"
-    static let order = 3
+    static let order = 4
 
     private static let windowLabels: [(key: String, label: String)] = [
         ("rolling", "5h"),
