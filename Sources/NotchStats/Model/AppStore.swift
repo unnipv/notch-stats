@@ -41,17 +41,22 @@ final class AppStore {
 
     private static let externalKey = "showOnExternalDisplays"
 
-    /// Let NotchStats read Claude's login from the keychain when the credentials
-    /// file has none. Off by default: turning it on is what lets macOS ask for
-    /// the login keychain password (once). With it off nothing here can prompt.
+    /// Let NotchStats perform a single non-interactive keychain read once at
+    /// launch (and once after wake) when no plain file or captured snapshot
+    /// holds a live token. Off by default; background polling never reads the
+    /// keychain regardless of this setting.
     var allowKeychainAccess: Bool {
         didSet {
             guard allowKeychainAccess != oldValue else { return }
             UserDefaults.standard.set(allowKeychainAccess, forKey: ClaudeCredentials.keychainOptInKey)
-            ClaudeCredentials.invalidate()
+            ClaudeCredentials.resetKeychainSession()
+            AntigravityCredentials.resetKeychainSession()
+            AntigravityProvider.invalidateCache()
             Task { @MainActor in
-                if allowKeychainAccess { await ClaudeCredentials.requestKeychainAccess() }
-                await refresh(force: true)
+                if allowKeychainAccess {
+                    await warmKeychainCredentialsIfAllowed()
+                }
+                await refresh(force: false)
             }
         }
     }
@@ -155,13 +160,41 @@ final class AppStore {
         sessionMonitor.start()
         observeWake()
         Task { @MainActor in
+            // At most one silent non-interactive keychain read at launch (only
+            // when opted in and no file/snapshot already holds a live token).
+            // The poll loop below performs zero keychain reads.
+            await warmKeychainCredentialsIfAllowed()
             await refresh()
+            dumpProvidersIfRequested()
             while !Task.isCancelled {
                 let jitter = Double.random(in: 0...8)
                 try? await Task.sleep(nanoseconds: UInt64((60 + jitter) * 1_000_000_000))
                 await refresh()
             }
         }
+    }
+
+    private func dumpProvidersIfRequested() {
+        guard ProcessInfo.processInfo.environment["NOTCHSTATS_DUMP"] != nil else { return }
+        let lines = providers.map { p in
+            let summary: String
+            if let error = p.error {
+                summary = "error=\"\(error)\" issue=\(String(describing: p.issue))"
+            } else {
+                summary = "windows=\(p.windows.count) metrics=\(p.metrics.count)"
+            }
+            return "[provider] id=\(p.id) name=\(p.name) \(summary)"
+        }.joined(separator: "\n")
+        FileHandle.standardError.write(Data((lines + "\n").utf8))
+    }
+
+    /// Performs at most one non-interactive (`UIFail` + `LAContext`) keychain
+    /// read per provider when `allowKeychainAccess` is on and no plain file or
+    /// captured snapshot already supplies a live token. Never prompts.
+    private func warmKeychainCredentialsIfAllowed() async {
+        guard allowKeychainAccess else { return }
+        await ClaudeCredentials.warmFromKeychainIfAllowed()
+        await AntigravityCredentials.warmFromKeychainIfAllowed()
     }
 
     func apply(sessions list: [AgentSession]) {
@@ -171,19 +204,21 @@ final class AppStore {
     }
 
     /// After sleep the network is usually not back yet and the cached keychain
-    /// read may be stale, so forget it and look again once things settle.
+    /// read may be stale, so forget it and retry once (non-interactively) once
+    /// things settle.
     private func observeWake() {
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
             wakeObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in
                     guard let self else { return }
-                    ClaudeCredentials.invalidate()
-                    AntigravityCredentials.invalidate()
+                    ClaudeCredentials.resetKeychainSession()
+                    AntigravityCredentials.resetKeychainSession()
                     AntigravityProvider.invalidateCache()
                     self.backoffs = [:]
                     self.sessionMonitor.refresh()
                     try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    await self.warmKeychainCredentialsIfAllowed()
                     await self.refresh()
                 }
             })
@@ -194,7 +229,46 @@ final class AppStore {
         liveAgents.contains(kind)
     }
 
-    /// Manual refresh: clears cached credentials and backoff first.
+    /// Explicit menu action: may display the macOS Keychain prompt once, then
+    /// saves an app-private `0600` snapshot so polling never reads the Keychain.
+    func captureClaudeLogin() {
+        Task { @MainActor in
+            _ = await ClaudeCredentials.captureFromKeychain()
+            backoffs.removeValue(forKey: ClaudeProvider.id)
+            await refresh(force: false)
+        }
+    }
+
+    /// Explicit menu action: deletes only NotchStats's `0600` Claude snapshot.
+    func forgetClaudeLogin() {
+        ClaudeCredentials.forgetSnapshot()
+        providers.removeAll { $0.id == ClaudeProvider.id }
+        backoffs.removeValue(forKey: ClaudeProvider.id)
+        Task { @MainActor in await refresh(force: false) }
+    }
+
+    /// Explicit menu action: may display the macOS Keychain prompt once, then
+    /// saves an app-private `0600` snapshot so polling never reads the Keychain.
+    func captureGeminiLogin() {
+        Task { @MainActor in
+            _ = await AntigravityCredentials.captureFromKeychain()
+            AntigravityProvider.invalidateCache()
+            backoffs.removeValue(forKey: AntigravityProvider.id)
+            await refresh(force: false)
+        }
+    }
+
+    /// Explicit menu action: deletes only NotchStats's `0600` Gemini snapshot.
+    func forgetGeminiLogin() {
+        AntigravityCredentials.forgetSnapshot()
+        AntigravityProvider.invalidateCache()
+        providers.removeAll { $0.id == AntigravityProvider.id }
+        backoffs.removeValue(forKey: AntigravityProvider.id)
+        Task { @MainActor in await refresh(force: false) }
+    }
+
+    /// Manual refresh: clears cached credentials and backoff, retries the
+    /// non-interactive launch read once if opted in, and re-queries providers.
     func refreshNow() {
         Task { await refresh(force: true) }
     }
@@ -208,10 +282,11 @@ final class AppStore {
         }
 
         if force {
-            ClaudeCredentials.invalidate()
-            AntigravityCredentials.invalidate()
+            ClaudeCredentials.resetKeychainSession()
+            AntigravityCredentials.resetKeychainSession()
             AntigravityProvider.invalidateCache()
             backoffs = [:]
+            await warmKeychainCredentialsIfAllowed()
         }
 
         let now = Date()

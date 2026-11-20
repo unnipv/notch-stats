@@ -4,21 +4,28 @@ This note explains how Claude Code stores OAuth credentials on macOS, how NotchS
 
 ---
 
-## How NotchStats reads Claude credentials
+## How NotchStats reads Claude & Gemini credentials
 
-NotchStats is **strictly read-only** with respect to Claude Code credentials:
+NotchStats is **strictly read-only** with respect to Claude Code and Antigravity/Gemini credentials, and **background polling performs zero Keychain secret reads**:
 
-1. `CLAUDE_CODE_OAUTH_TOKEN` environment variable (if set).
-2. `$CLAUDE_CONFIG_DIR/.credentials.json` (defaults to `~/.claude/.credentials.json`).
-3. The macOS login Keychain (`Claude Code-credentials` / `Claude Code`), **only** when **Allow Keychain Access** is turned on in the NotchStats menu bar.
+1. Environment variable (`CLAUDE_CODE_OAUTH_TOKEN` for Claude; `JETSKI_OAUTH_TOKEN` for Gemini).
+2. Plain CLI file (`$CLAUDE_CONFIG_DIR/.credentials.json`, default `~/.claude/.credentials.json`; `$GEMINI_CLI_HOME/.gemini/oauth_creds.json`, default `~/.gemini/oauth_creds.json`) — always free and unprompted.
+3. App-private `0600` snapshot under `~/Library/Application Support/NotchStats/credentials/<provider>.json` — created **only** when you deliberately click **Capture Claude login…** or **Capture Gemini login…** in the menu bar. Contains only `accessToken`, `expiresAt`, and `capturedAt` (never refresh tokens) and is treated as stale once expired or older than the provider's token lifetime (8h Claude, 1h Gemini). Delete it anytime with **Forget Claude login** / **Forget Gemini login**.
+4. In-memory session cache populated **at most once at launch** (or after wake / manual `⌘R`) **only** when **Allow Keychain Access** is enabled and no live file/snapshot exists. Failed or refused reads are remembered for the rest of the session (no retry storm).
 
 Key guarantees:
-- **Never prompts in the background:** Every background Keychain probe and secret read attaches a `LocalAuthentication` `LAContext` with `interactionNotAllowed = true` (`kSecUseAuthenticationContext`). With **Allow Keychain Access** off, NotchStats only probes item attributes (`kSecReturnAttributes`), never secret bytes (`kSecReturnData`).
-- **Never mutates credentials:** NotchStats never calls `SecItemAdd` / `SecItemUpdate` / `SecItemDelete`, never spawns `/usr/bin/security`, never refreshes OAuth tokens, and never reads or creates `~/.claude/.credentials.lock` or `~/.claude/.oauth_refresh.lock`.
+- **Zero background prompts:** Every non-interactive Keychain probe and secret read sets **all three** macOS suppression guards: `kSecUseAuthenticationUI = kSecUseAuthenticationUIFail`, `LAContext.interactionNotAllowed = true` (`kSecUseAuthenticationContext`), and `SecKeychainSetUserInteractionAllowed(false)` (via `KeychainGuard`). On macOS's legacy `login.keychain-db`, neither `LAContext` nor `UIFail` alone suppresses legacy ACL dialogs (`AclValidationContext(action:24)`); `SecKeychainSetUserInteractionAllowed(false)` makes `securityd` reject missing ACL grants silently with zero dialog. With **Allow Keychain Access** off, only an attributes-only probe (`kSecReturnAttributes`, never `kSecReturnData`) runs for both Claude and Gemini.
+- **Never mutates other tools' credentials:** NotchStats never calls `SecItemAdd` / `SecItemUpdate` / `SecItemDelete`, never spawns `/usr/bin/security`, never refreshes OAuth tokens, and never writes to `~/.claude/` or `~/.gemini/` (including `.credentials.lock` or `.oauth_refresh.lock`).
 - **Resilient to normal OAuth rotation:**
-  - If an expired `~/.claude/.credentials.json` sits next to a fresher Keychain login (and Keychain access is enabled), NotchStats uses the fresher Keychain token rather than flashing "Claude token expired".
-  - If an API call returns HTTP `401` because Claude Code rotated the token mid-poll, NotchStats invalidates its cache, re-reads live sources, and retries **once** with the rotated token before surfacing "Claude token rejected".
+  - If an expired `~/.claude/.credentials.json` or `~/.gemini/oauth_creds.json` sits next to a fresher captured snapshot (or cached Keychain login), NotchStats uses the fresher token rather than flashing expired.
+  - If an API call returns HTTP `401` because the CLI rotated the token mid-poll, NotchStats re-reads non-keychain sources once before surfacing "rejected".
   - If Claude Code explicitly clears a dead login (`accessToken: ""`, `expiresAt: 0`), NotchStats reports **"Not signed in to Claude"** instead of "Keychain access denied" or "Claude credentials unreadable".
+
+### Ad-hoc signing vs. stable signing vs. capture-once
+
+- **Ad-hoc signing (`codesign -s -`) re-prompts after every rebuild:** macOS pins a Keychain "Always Allow" ACL grant to the app's per-build CDHash when the binary is ad-hoc signed, so rebuilding the app immediately invalidates the grant.
+- **A stable signing identity makes the grant stick across rebuilds:** run `./scripts/make-signing-cert.sh` once to create and trust a self-signed `"NotchStats Dev"` code-signing certificate in your login Keychain (one password prompt during setup). `./build.sh` auto-detects any `"NotchStats*"` code-signing identity (or honours `NOTCHSTATS_SIGN_IDENTITY`) and falls back to ad-hoc if none exists.
+- **Capture-once removes the prompt even with ad-hoc signing:** clicking **Capture Claude login…** or **Capture Gemini login…** reads the Keychain once into NotchStats's own `0600` snapshot file under `~/Library/Application Support/NotchStats/credentials/`. Every subsequent background poll reads that file instead of the Keychain, so ad-hoc builds never prompt during polling either.
 
 ---
 

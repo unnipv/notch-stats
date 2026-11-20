@@ -178,8 +178,12 @@ struct AntigravityProvider: UsageProvider {
         switch failure {
         case .notSignedIn:
             return issue(.notSignedIn, "Not signed in to Gemini", "Sign in with Antigravity or `agy`")
+        case .keychainNotAllowed:
+            return issue(.keychainNotAllowed, "Gemini login found, not shared",
+                         "Menu bar ▸ Capture Gemini login…")
         case .keychainDenied:
-            return issue(.keychainDenied, "Keychain access denied", "Unlock the keychain to read Antigravity login")
+            return issue(.keychainDenied, "Keychain access denied",
+                         "Menu bar ▸ Capture Gemini login…")
         case .fileUnreadable:
             return issue(.unreadable, "Gemini credentials unreadable", "File is being rewritten — retrying")
         }

@@ -117,8 +117,8 @@ If a provider isn't set up, its row shows an actionable caption (for example
 | Provider | What you need first | Where NotchStats reads it |
 | --- | --- | --- |
 | **Codex / ChatGPT** | Sign in with the Codex CLI: `codex login` | `~/.codex/auth.json` |
-| **Claude** | Sign in with Claude Code: `claude` | `~/.claude/.credentials.json` (the keychain only if you turn on **Allow Keychain Access**) |
-| **Gemini (Antigravity)** | Sign in with Antigravity (`agy` CLI or Antigravity IDE) or Gemini CLI | `JETSKI_OAUTH_TOKEN`, `agy` Keychain (`gemini` / `antigravity`, non-interactive), or `~/.gemini/oauth_creds.json` |
+| **Claude** | Sign in with Claude Code: `claude` | `~/.claude/.credentials.json`, captured `0600` snapshot (**Capture Claude login…**), or launch-only Keychain read if opted in |
+| **Gemini (Antigravity)** | Sign in with Antigravity (`agy` CLI or Antigravity IDE) or Gemini CLI | `JETSKI_OAUTH_TOKEN`, `~/.gemini/oauth_creds.json`, captured `0600` snapshot (**Capture Gemini login…**), or launch-only Keychain read if opted in |
 | **Anthropic API** | Add an Anthropic API key in OpenCode (`/connect` → **Anthropic**, or `opencode auth login`) | `opencode.db` → `credential` (key) + per-message `cost` |
 | **OpenCode Go** | Subscribe to Go, then `/connect` in OpenCode (or `opencode auth login`) and pick **OpenCode Go** | `~/.local/share/opencode/opencode.db` → `credential` |
 | **OpenRouter** | Add your OpenRouter key in OpenCode's auth | `~/.local/share/opencode/opencode.db` → `credential` |
@@ -135,29 +135,34 @@ you how to refresh it, not a blank row.
 **No special permissions.** The paths above are ordinary files in your home
 directory; macOS never asks for Full Disk Access or Accessibility.
 
-**Claude and the keychain.** NotchStats reads Claude's login from
-`~/.claude/.credentials.json` (or `CLAUDE_CODE_OAUTH_TOKEN`) — a plain file, so
-macOS never asks for a password. It does **not** use `security
-find-generic-password -w` or any other call that asks the keychain for the
-secret, because that is what makes macOS demand your login keychain password
-(and the grant is lost whenever the app is rebuilt). If the file is missing but
-the keychain holds a Claude login, the Claude row says *"Claude login found, not
-readable"* with a pointer to the menu. There, **Allow Keychain Access (asks for
-your password once)** — off by default, remembered in `UserDefaults` — lets
-NotchStats read the keychain item; macOS asks for your login password when you
-turn it on, so choose **Always Allow**. With it off, the only keychain call is
-an attributes-only check that an item exists (using a non-interactive
-`LAContext`), which cannot prompt. A missing or half-written file keeps the last
-good token for two minutes instead of dropping the row, and an HTTP 401 after a
-token rotation re-reads once before showing an error. See
-[docs/claude-login-troubleshooting.md](docs/claude-login-troubleshooting.md) if
-the Claude Code CLI itself keeps logging out on macOS. If you sign in with an
-**API key** rather
-than a Pro/Max account, Anthropic reports that usage limits don't apply to API
-organisations — NotchStats shows that instead of inventing a number. When that
-key comes from OpenCode, a separate **Anthropic API** row totals your spend from
-OpenCode's local ledger. Every provider is time-boxed, so a pending prompt can
-never stall the others.
+**Claude, Gemini, and the keychain.** Background polling performs **zero**
+Keychain secret reads — NotchStats can never interrupt you with a recurring
+keychain password dialog. It checks plain files first (`~/.claude/.credentials.json`,
+`~/.gemini/oauth_creds.json`, or env vars `CLAUDE_CODE_OAUTH_TOKEN` /
+`JETSKI_OAUTH_TOKEN`), which never prompt. When a login lives only in the macOS
+login Keychain, the row says *"Claude login not shared — Capture in menu"* or
+*"Gemini login found, not shared"*. Click **Capture Claude login…** or **Capture
+Gemini login…** in the menu bar once: macOS may ask for your password on that
+explicit click, and NotchStats saves an app-private `0600` snapshot under
+`~/Library/Application Support/NotchStats/credentials/<provider>.json` containing
+only `accessToken`, `expiresAt`, and `capturedAt` (never refresh tokens). Every
+subsequent poll reads that snapshot file, never the Keychain, and you can delete
+it anytime with **Forget Claude login** / **Forget Gemini login**.
+
+Ad-hoc signing (`codesign -s -`) changes the app's CDHash on every rebuild and
+invalidates any "Always Allow" ACL grant; run `./scripts/make-signing-cert.sh`
+once to create a persistent `"NotchStats Dev"` signing certificate so `./build.sh`
+(or `NOTCHSTATS_SIGN_IDENTITY`) keeps the grant across rebuilds. Even with
+ad-hoc signing, capture-once removes background prompts completely. Every
+non-interactive Keychain query sets **both** `kSecUseAuthenticationUIFail` and
+`LAContext.interactionNotAllowed = true`. See
+[docs/claude-login-troubleshooting.md](docs/claude-login-troubleshooting.md) for
+full details and Claude CLI logout troubleshooting. If you sign in with an
+**API key** rather than a Pro/Max account, Anthropic reports that usage limits
+don't apply to API organisations — NotchStats shows that instead of inventing a
+number. When that key comes from OpenCode, a separate **Anthropic API** row
+totals your spend from OpenCode's local ledger. Every provider is time-boxed, so
+a stalled request can never stall the others.
 
 ## Running it
 
@@ -174,13 +179,20 @@ NotchStats lives in the menu bar (there is no Dock icon and no window).
 **Menu**
 
 - **Refresh Now** (⌘R) — re-query the usage endpoints immediately.
+- **Capture Claude login…** / **Forget Claude login** — explicitly read Claude's
+  Keychain login once into an app-private `0600` snapshot (or delete that
+  snapshot).
+- **Capture Gemini login…** / **Forget Gemini login** — explicitly read
+  Antigravity/Gemini's Keychain login once into an app-private `0600` snapshot
+  (or delete that snapshot).
 - **Show on External Displays** — off by default. When off, the island only
   appears on the built-in notched display; when on, displays without a notch get
   a floating pill. It floats above the menu bar, so leave it off if it covers
   other windows.
-- **Allow Keychain Access (asks for your password once)** — off by default. Turn
-  this on only if `~/.claude/.credentials.json` does not exist and you want
-  NotchStats to read Claude's login from the macOS Keychain.
+- **Allow Keychain Access (read once at launch)** — off by default. When on,
+  NotchStats attempts one silent, non-interactive Keychain read at launch or
+  wake (for stably signed builds with an Always Allow grant). Background polls
+  never read the Keychain.
 - **Launch at Login** — start automatically when you log in.
 - **Quit NotchStats** (⌘Q).
 
@@ -268,9 +280,10 @@ subprocesses. That trade buys and costs:
 ## Development
 
 ```sh
-swift build          # compile
-swift test           # unit tests
-./build.sh           # assemble build/NotchStats.app (universal, ad-hoc signed)
+swift build                      # compile
+swift test                       # unit tests
+./scripts/make-signing-cert.sh   # optional one-time "NotchStats Dev" cert so Keychain grants stick
+./build.sh                       # assemble build/NotchStats.app (uses NOTCHSTATS_SIGN_IDENTITY / "NotchStats*" / ad-hoc)
 ./scripts/make-icns.sh
 ```
 

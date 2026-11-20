@@ -1,12 +1,17 @@
 import AppKit
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let store = AppStore()
     private var island: IslandWindowController?
     private var statusItem: NSStatusItem?
 
+    private var forgetClaudeItem: NSMenuItem?
+    private var forgetGeminiItem: NSMenuItem?
+    private var keychainAccessItem: NSMenuItem?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        KeychainGuard.disableBackgroundInteraction()
         island = IslandWindowController(store: store)
         island?.show()
         installStatusItem()
@@ -57,6 +62,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.delegate = self
 
         let title = NSMenuItem(title: "NotchStats", action: nil, keyEquivalent: "")
         title.isEnabled = false
@@ -67,20 +74,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refresh.target = self
         menu.addItem(refresh)
 
+        menu.addItem(.separator())
+
+        let captureClaude = NSMenuItem(title: "Capture Claude login…",
+                                       action: #selector(captureClaudeLogin), keyEquivalent: "")
+        captureClaude.target = self
+        captureClaude.toolTip = "Reads Claude Code's login from the macOS Keychain once (macOS may ask for your "
+            + "password) and saves a private 0600 snapshot in ~/Library/Application Support/NotchStats/credentials/. "
+            + "Background polling reads that snapshot and never touches the Keychain."
+        menu.addItem(captureClaude)
+
+        let forgetClaude = NSMenuItem(title: "Forget Claude login",
+                                      action: #selector(forgetClaudeLogin), keyEquivalent: "")
+        forgetClaude.target = self
+        forgetClaude.isEnabled = CredentialSnapshotStore.exists(provider: .claude)
+        forgetClaude.toolTip = "Deletes NotchStats's private Claude snapshot. Never touches ~/.claude/ or the Keychain."
+        menu.addItem(forgetClaude)
+        forgetClaudeItem = forgetClaude
+
+        let captureGemini = NSMenuItem(title: "Capture Gemini login…",
+                                       action: #selector(captureGeminiLogin), keyEquivalent: "")
+        captureGemini.target = self
+        captureGemini.toolTip = "Reads Antigravity's login from the macOS Keychain once (macOS may ask for your "
+            + "password) and saves a private 0600 snapshot in ~/Library/Application Support/NotchStats/credentials/. "
+            + "Background polling reads that snapshot and never touches the Keychain."
+        menu.addItem(captureGemini)
+
+        let forgetGemini = NSMenuItem(title: "Forget Gemini login",
+                                      action: #selector(forgetGeminiLogin), keyEquivalent: "")
+        forgetGemini.target = self
+        forgetGemini.isEnabled = CredentialSnapshotStore.exists(provider: .gemini)
+        forgetGemini.toolTip = "Deletes NotchStats's private Gemini snapshot. Never touches ~/.gemini/ or the Keychain."
+        menu.addItem(forgetGemini)
+        forgetGeminiItem = forgetGemini
+
+        menu.addItem(.separator())
+
         let external = NSMenuItem(title: "Show on External Displays",
                                   action: #selector(toggleExternalDisplays), keyEquivalent: "")
         external.target = self
         external.state = store.showOnExternalDisplays ? .on : .off
         menu.addItem(external)
 
-        let keychain = NSMenuItem(title: "Allow Keychain Access (asks for your password once)",
+        let keychain = NSMenuItem(title: "Allow Keychain Access (read once at launch)",
                                   action: #selector(toggleKeychainAccess), keyEquivalent: "")
         keychain.target = self
         keychain.state = store.allowKeychainAccess ? .on : .off
-        keychain.toolTip = "Off by default. NotchStats reads Claude's login from ~/.claude/.credentials.json. "
-            + "Turn this on only if that file doesn't exist: macOS will then ask for your login keychain "
-            + "password — choose Always Allow so it doesn't ask again."
+        keychain.toolTip = "Off by default. When on, NotchStats attempts one silent, non-interactive Keychain read "
+            + "at launch or wake (useful when signed with a stable certificate and granted Always Allow). "
+            + "Background polls never read the Keychain."
         menu.addItem(keychain)
+        keychainAccessItem = keychain
 
         let login = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         login.target = self
@@ -101,8 +145,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func menuWillOpen(_ menu: NSMenu) {
+        forgetClaudeItem?.isEnabled = CredentialSnapshotStore.exists(provider: .claude)
+        forgetGeminiItem?.isEnabled = CredentialSnapshotStore.exists(provider: .gemini)
+        keychainAccessItem?.state = store.allowKeychainAccess ? .on : .off
+    }
+
     @objc private func refreshNow() {
         store.refreshNow()
+    }
+
+    @objc private func captureClaudeLogin() {
+        store.captureClaudeLogin()
+    }
+
+    @objc private func forgetClaudeLogin() {
+        store.forgetClaudeLogin()
+    }
+
+    @objc private func captureGeminiLogin() {
+        store.captureGeminiLogin()
+    }
+
+    @objc private func forgetGeminiLogin() {
+        store.forgetGeminiLogin()
     }
 
     @objc private func toggleExternalDisplays(_ sender: NSMenuItem) {
