@@ -1,3 +1,5 @@
+import LocalAuthentication
+import Security
 import XCTest
 @testable import NotchStats
 
@@ -155,5 +157,137 @@ final class CredentialResolutionTests: XCTestCase {
     func testOptInKeyIsSharedByMenuAndResolver() {
         // The menu item and the resolver share one UserDefaults key.
         XCTAssertEqual(C.keychainOptInKey, "allowKeychainAccess")
+    }
+
+    // MARK: - Expired file vs fresh keychain, and explicitly cleared logins
+
+    func testExpiredFileFallsBackToFreshKeychainWhenOptedIn() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let expiredFile = #"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-old","expiresAt":1799999000000}}"#
+        let freshKeychain = #"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-fresh","expiresAt":1800010000000}}"#
+        let resolution = C.resolve(
+            inputs(file: .data(Data(expiredFile.utf8)), allowed: true,
+                   secret: .found(Data(freshKeychain.utf8))),
+            lastGood: nil, now: now)
+        XCTAssertEqual(token(resolution), "sk-ant-oat01-fresh")
+        if case let .found(_, source) = resolution { XCTAssertEqual(source, .keychain) }
+    }
+
+    func testExpiredFileStillReturnsExpiredWhenKeychainHasNothingFresher() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let expiredFile = #"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-old","expiresAt":1799999000000}}"#
+        let resolution = C.resolve(
+            inputs(file: .data(Data(expiredFile.utf8)), allowed: true, secret: .absent),
+            lastGood: nil, now: now)
+        XCTAssertEqual(token(resolution), "sk-ant-oat01-old")
+        if case let .found(cred, source) = resolution {
+            XCTAssertTrue(cred.isExpired(now: now))
+            XCTAssertEqual(source, .file)
+        }
+    }
+
+    func testClearedKeychainCredentialIsNotSignedInNotKeychainDenied() {
+        let now = Date()
+        // Exact shape Claude Code writes on dead-token clear (invalid_grant).
+        let cleared = #"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0,"scopes":["user:inference"]}}"#
+        let resolution = C.resolve(
+            inputs(allowed: true, secret: .found(Data(cleared.utf8))),
+            lastGood: lastGood(now: now), now: now)
+        XCTAssertEqual(resolution, .missing(.notSignedIn),
+                       "an explicitly cleared keychain item must report notSignedIn, not keychainDenied or stale lastGood")
+    }
+
+    func testClearedFileCredentialIsNotUnreadableAndDoesNotServeLastGood() {
+        let now = Date()
+        let cleared = #"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}"#
+        let resolution = C.resolve(
+            inputs(file: .data(Data(cleared.utf8)), allowed: true, secret: .absent),
+            lastGood: lastGood(now: now), now: now)
+        XCTAssertEqual(resolution, .missing(.notSignedIn))
+    }
+
+    func testClearedFileFallsThroughToLiveKeychainWhenOptedIn() {
+        let cleared = #"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}"#
+        let resolution = C.resolve(
+            inputs(file: .data(Data(cleared.utf8)), allowed: true,
+                   secret: .found(Data(keychainJSON.utf8))),
+            lastGood: nil)
+        XCTAssertEqual(token(resolution), "sk-ant-oat01-keychain")
+        if case let .found(_, source) = resolution { XCTAssertEqual(source, .keychain) }
+    }
+
+    // MARK: - Non-interactive queries & read-only guarantees
+
+    func testProbeQueryIsAttributesOnlyAndNonInteractive() {
+        let query = C.Keychain.probeQuery(service: "Claude Code-credentials")
+        XCTAssertEqual(query[kSecReturnAttributes as String] as? Bool, true)
+        XCTAssertNil(query[kSecReturnData as String], "probe must never request secret bytes")
+        let context = query[kSecUseAuthenticationContext as String] as? LAContext
+        XCTAssertEqual(context?.interactionNotAllowed, true,
+                       "probe must attach an LAContext with interactionNotAllowed = true")
+    }
+
+    func testBackgroundSecretQueryForbidsUIInteraction() {
+        let failQuery = C.Keychain.secretQuery(service: "Claude Code-credentials", interaction: .fail)
+        let context = failQuery[kSecUseAuthenticationContext as String] as? LAContext
+        XCTAssertEqual(context?.interactionNotAllowed, true,
+                       "background secret reads must never prompt")
+
+        let allowQuery = C.Keychain.secretQuery(service: "Claude Code-credentials", interaction: .allow)
+        XCTAssertNil(allowQuery[kSecUseAuthenticationContext as String],
+                     "only the explicit user opt-in path may allow macOS to prompt")
+    }
+
+    func testCredentialsFilePathHonoursClaudeConfigDir() {
+        let custom = C.Keychain.credentialsFilePath(
+            environment: ["CLAUDE_CONFIG_DIR": "/tmp/custom-claude"],
+            homeDirectory: "/Users/example")
+        XCTAssertEqual(custom, "/tmp/custom-claude/.credentials.json")
+
+        let fallback = C.Keychain.credentialsFilePath(
+            environment: ["CLAUDE_CONFIG_DIR": "   "],
+            homeDirectory: "/Users/example")
+        XCTAssertEqual(fallback, "/Users/example/.claude/.credentials.json")
+    }
+
+    func testLiveFileReadIsStrictlyReadOnlyAndCreatesNoLockFiles() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("notchstats-claude-ro-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let credFile = dir.appendingPathComponent(".credentials.json")
+        try Data(fileJSON.utf8).write(to: credFile)
+        let before = try FileManager.default.attributesOfItem(atPath: credFile.path)[.modificationDate] as? Date
+
+        let read = C.Keychain.liveFileRead(environment: ["CLAUDE_CONFIG_DIR": dir.path])
+        XCTAssertEqual(read, .data(Data(fileJSON.utf8)))
+
+        let after = try FileManager.default.attributesOfItem(atPath: credFile.path)[.modificationDate] as? Date
+        XCTAssertEqual(before, after, "reading credentials must not modify the file")
+
+        let entries = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        XCTAssertEqual(entries, [".credentials.json"],
+                       "reading credentials must never create lock or sidecar files")
+    }
+
+    func testClaudeCredentialsSourceContainsNoMutatingOrSubprocessAPIs() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // NotchStatsTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // repo root
+            .appendingPathComponent("Sources/NotchStats/Providers/ClaudeCredentials.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        let forbidden = [
+            "SecItemAdd", "SecItemUpdate", "SecItemDelete",
+            "SecKeychainItemModify", "SecKeychainItemDelete",
+            "/usr/bin/security", "Process(", "NSTask",
+            "write(to:", "createFile(", "removeItem("
+        ]
+        for symbol in forbidden {
+            XCTAssertFalse(source.contains(symbol),
+                           "ClaudeCredentials.swift must stay strictly read-only (found \(symbol))")
+        }
     }
 }

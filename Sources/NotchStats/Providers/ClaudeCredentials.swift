@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 /// Finds the credential Claude Code already wrote, without ever modifying it
@@ -114,11 +115,12 @@ enum ClaudeCredentials {
         var readKeychain: () -> KeychainSecret
 
         static func live(keychainAllowed: Bool) -> Inputs {
-            Inputs(environment: ProcessInfo.processInfo.environment,
-                   readFile: Keychain.liveFileRead,
-                   keychainAllowed: keychainAllowed,
-                   probeKeychain: { Keychain.probe() },
-                   readKeychain: { Keychain.readSecret(interaction: .fail) })
+            let env = ProcessInfo.processInfo.environment
+            return Inputs(environment: env,
+                          readFile: { Keychain.liveFileRead(environment: env) },
+                          keychainAllowed: keychainAllowed,
+                          probeKeychain: { Keychain.probe() },
+                          readKeychain: { Keychain.readSecret(interaction: .fail) })
         }
     }
 
@@ -126,6 +128,19 @@ enum ClaudeCredentials {
         let credential: Credential
         let source: Source
         let at: Date
+    }
+
+    /// Outcome of parsing raw credential bytes from disk or the keychain.
+    /// Kept separate from `Credential?` so an explicitly cleared login
+    /// (`{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}`)
+    /// is never mistaken for a half-written file or a denied keychain read.
+    enum ParseResult: Equatable {
+        case credential(Credential)
+        /// Valid JSON whose `claudeAiOauth` object explicitly has an empty token
+        /// (the shape Claude Code writes when clearing a dead/signed-out grant).
+        case cleared
+        /// Unparseable, truncated, or unrecognised bytes.
+        case malformed
     }
 
     /// How long a good credential outlives a missing or half-written file.
@@ -143,29 +158,53 @@ enum ClaudeCredentials {
         }
 
         var fileProblem = false
+        var fileCleared = false
+        var expiredFileCredential: Credential?
         switch inputs.readFile() {
         case .absent:
             break
         case .unreadable:
             fileProblem = true
         case let .data(data):
-            if let credential = credential(from: data) { return .found(credential, .file) }
-            // Present but not parseable: the CLI writes it non-atomically.
-            fileProblem = true
+            switch parseCredential(from: data) {
+            case let .credential(credential):
+                if !credential.isExpired(now: now) {
+                    return .found(credential, .file)
+                }
+                // File token is expired. If the keychain is opted in, check
+                // whether a fresher token lives there before declaring expiry.
+                expiredFileCredential = credential
+            case .cleared:
+                fileCleared = true
+            case .malformed:
+                // Present but not parseable: the CLI writes it non-atomically.
+                fileProblem = true
+            }
         }
 
         var keychain: Failure?
+        var keychainCleared = false
+        var expiredKeychainCredential: Credential?
         if inputs.keychainAllowed {
             switch inputs.readKeychain() {
             case let .found(data):
-                if let credential = credential(from: data) { return .found(credential, .keychain) }
-                keychain = .keychainDenied
+                switch parseCredential(from: data) {
+                case let .credential(credential):
+                    if !credential.isExpired(now: now) {
+                        return .found(credential, .keychain)
+                    }
+                    expiredKeychainCredential = credential
+                case .cleared:
+                    keychainCleared = true
+                case .malformed:
+                    keychain = .keychainDenied
+                }
             case .absent:
                 break
             case .refused:
                 keychain = .keychainDenied
             }
-        } else {
+        } else if expiredFileCredential == nil {
             switch inputs.probeKeychain() {
             case .present: keychain = .keychainNotAllowed
             case .unknown: keychain = .keychainDenied
@@ -173,15 +212,41 @@ enum ClaudeCredentials {
             }
         }
 
+        // No live (unexpired) token was found; if one or both sources had an
+        // expired token, report the most recent one rather than "not signed in".
+        if let chosen = fresherExpired(file: expiredFileCredential, keychain: expiredKeychainCredential) {
+            return .found(chosen.credential, chosen.source)
+        }
+
+        // An explicit cleared login (empty accessToken in valid JSON) means the
+        // CLI signed out; do not mask it behind a cached token from that store.
+        let explicitlyCleared = keychainCleared || (fileCleared && (keychain == nil || lastGood?.source == .file))
+
         // A file that is missing or mid-rewrite must not wipe a token that was
         // good a moment ago; the next tick reads it again.
-        if let lastGood, now.timeIntervalSince(lastGood.at) < graceLifetime,
+        if !explicitlyCleared,
+           let lastGood, now.timeIntervalSince(lastGood.at) < graceLifetime,
            !lastGood.credential.isExpired(now: now) {
             return .found(lastGood.credential, .lastKnown)
         }
 
         if let keychain { return .missing(keychain) }
         return .missing(fileProblem ? .fileUnreadable : .notSignedIn)
+    }
+
+    private static func fresherExpired(file: Credential?, keychain: Credential?) -> (credential: Credential, source: Source)? {
+        switch (file, keychain) {
+        case let (.some(f), .some(k)):
+            let fTime = f.expiresAt?.timeIntervalSince1970 ?? 0
+            let kTime = k.expiresAt?.timeIntervalSince1970 ?? 0
+            return kTime > fTime ? (k, .keychain) : (f, .file)
+        case let (.some(f), .none):
+            return (f, .file)
+        case let (.none, .some(k)):
+            return (k, .keychain)
+        case (.none, .none):
+            return nil
+        }
     }
 
     // MARK: - State
@@ -209,7 +274,8 @@ enum ClaudeCredentials {
         let resolution = await withCheckedContinuation { continuation in
             queue.async { continuation.resume(returning: resolve(inputs, lastGood: previous)) }
         }
-        if case let .found(credential, source) = resolution, source != .lastKnown {
+        if case let .found(credential, source) = resolution,
+           source != .lastKnown, !credential.isExpired() {
             lastGood.withLock { $0 = LastGood(credential: credential, source: source, at: Date()) }
         }
         return resolution
@@ -230,34 +296,78 @@ enum ClaudeCredentials {
 
     // MARK: - Keychain and file access
 
-    private enum Keychain {
+    enum Keychain {
         /// Claude Code stores its login under both of these services.
         static let services = ["Claude Code-credentials", "Claude Code"]
 
         enum Interaction { case fail, allow }
 
-        static func liveFileRead() -> FileRead {
-            let path = NSHomeDirectory() + "/.claude/.credentials.json"
+        /// Resolves the path to Claude Code's credentials file, honouring
+        /// `CLAUDE_CONFIG_DIR` when set and falling back to `~/.claude`.
+        /// Never reads or creates lock files (`.credentials.lock`,
+        /// `.oauth_refresh.lock`).
+        static func credentialsFilePath(environment: [String: String] = ProcessInfo.processInfo.environment,
+                                        homeDirectory: String = NSHomeDirectory()) -> String {
+            let override = environment["CLAUDE_CONFIG_DIR"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let base: String
+            if !override.isEmpty {
+                base = (override as NSString).expandingTildeInPath
+            } else {
+                base = (homeDirectory as NSString).appendingPathComponent(".claude")
+            }
+            return (base as NSString).appendingPathComponent(".credentials.json")
+        }
+
+        static func liveFileRead(environment: [String: String] = ProcessInfo.processInfo.environment,
+                                 homeDirectory: String = NSHomeDirectory()) -> FileRead {
+            let path = credentialsFilePath(environment: environment, homeDirectory: homeDirectory)
             guard FileManager.default.fileExists(atPath: path) else { return .absent }
             guard let data = FileManager.default.contents(atPath: path), !data.isEmpty else { return .unreadable }
             return .data(data)
         }
 
+        /// Builds the attributes-only existence query. Never sets
+        /// `kSecReturnData` and attaches a non-interactive `LAContext` so
+        /// macOS can never show a password or unlock dialog.
+        static func probeQuery(service: String) -> [String: Any] {
+            let context = LAContext()
+            context.interactionNotAllowed = true
+            return [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecReturnAttributes as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+                kSecUseAuthenticationContext as String: context
+            ]
+        }
+
+        /// Builds the secret-read query. `.fail` (every background read)
+        /// attaches a non-interactive `LAContext`; `.allow` is only used for
+        /// the user's one-off opt-in click.
+        static func secretQuery(service: String, interaction: Interaction) -> [String: Any] {
+            var query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            if interaction == .fail {
+                let context = LAContext()
+                context.interactionNotAllowed = true
+                query[kSecUseAuthenticationContext as String] = context
+            }
+            return query
+        }
+
         /// Attributes only — no secret is requested, so this can never ask
-        /// for a password. `UIFail` also stops a locked keychain from showing
-        /// an unlock dialog.
+        /// for a password. `interactionNotAllowed` also stops a locked keychain
+        /// from showing an unlock dialog.
         static func probe() -> KeychainProbe {
             var unknown = false
             for service in services {
-                let query: [String: Any] = [
-                    kSecClass as String: kSecClassGenericPassword,
-                    kSecAttrService as String: service,
-                    kSecReturnAttributes as String: true,
-                    kSecMatchLimit as String: kSecMatchLimitOne,
-                    kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
-                ]
                 var item: CFTypeRef?
-                switch SecItemCopyMatching(query as CFDictionary, &item) {
+                switch SecItemCopyMatching(probeQuery(service: service) as CFDictionary, &item) {
                 case errSecSuccess: return .present
                 case errSecItemNotFound: continue
                 default: unknown = true
@@ -272,20 +382,11 @@ enum ClaudeCredentials {
         static func readSecret(interaction: Interaction) -> KeychainSecret {
             var refused = false
             for service in services {
-                var query: [String: Any] = [
-                    kSecClass as String: kSecClassGenericPassword,
-                    kSecAttrService as String: service,
-                    kSecReturnData as String: true,
-                    kSecMatchLimit as String: kSecMatchLimitOne
-                ]
-                // Without the key macOS may prompt — that is `.allow`.
-                if interaction == .fail {
-                    query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
-                }
                 var item: CFTypeRef?
-                switch SecItemCopyMatching(query as CFDictionary, &item) {
+                switch SecItemCopyMatching(secretQuery(service: service, interaction: interaction) as CFDictionary, &item) {
                 case errSecSuccess:
                     if let data = item as? Data { return .found(data) }
+                    refused = true
                 case errSecItemNotFound:
                     continue
                 default:
@@ -298,22 +399,36 @@ enum ClaudeCredentials {
 
     // MARK: - Parsing
 
-    static func credential(from data: Data) -> Credential? {
+    static func parseCredential(from data: Data) -> ParseResult {
         if let object = jsonObject(data) {
             // macOS keychain shape: { "claudeAiOauth": { "accessToken": … } }
             // Some files are flat:  { "accessToken": … }
             let oauth = (object["claudeAiOauth"] as? [String: Any]) ?? object
-            guard let token = oauth["accessToken"] as? String, !token.isEmpty else { return nil }
-            return Credential(token: token, kind: .init(token: token), expiresAt: expiry(oauth["expiresAt"]))
+            if let token = oauth["accessToken"] as? String {
+                if !token.isEmpty {
+                    return .credential(Credential(token: token, kind: .init(token: token),
+                                                  expiresAt: expiry(oauth["expiresAt"])))
+                }
+                // Explicit empty accessToken inside valid JSON (Claude Code's
+                // dead-token disk clear writes accessToken:"", refreshToken:"",
+                // expiresAt:0).
+                return .cleared
+            }
+            return .malformed
         }
 
         // The "Claude Code" item holds a bare API key rather than JSON.
         if let raw = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            raw.hasPrefix("sk-ant-") {
-            return Credential(token: raw, kind: .init(token: raw), expiresAt: nil)
+            return .credential(Credential(token: raw, kind: .init(token: raw), expiresAt: nil))
         }
-        return nil
+        return .malformed
+    }
+
+    static func credential(from data: Data) -> Credential? {
+        guard case let .credential(credential) = parseCredential(from: data) else { return nil }
+        return credential
     }
 
     private static func expiry(_ value: Any?) -> Date? {

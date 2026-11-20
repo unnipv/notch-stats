@@ -140,9 +140,13 @@ readable"* with a pointer to the menu. There, **Allow Keychain Access (asks for
 your password once)** — off by default, remembered in `UserDefaults` — lets
 NotchStats read the keychain item; macOS asks for your login password when you
 turn it on, so choose **Always Allow**. With it off, the only keychain call is
-an attributes-only check that an item exists, which cannot prompt. A missing or
-half-written file keeps the last good token for two minutes instead of dropping
-the row. If you sign in with an **API key** rather
+an attributes-only check that an item exists (using a non-interactive
+`LAContext`), which cannot prompt. A missing or half-written file keeps the last
+good token for two minutes instead of dropping the row, and an HTTP 401 after a
+token rotation re-reads once before showing an error. See
+[docs/claude-login-troubleshooting.md](docs/claude-login-troubleshooting.md) if
+the Claude Code CLI itself keeps logging out on macOS. If you sign in with an
+**API key** rather
 than a Pro/Max account, Anthropic reports that usage limits don't apply to API
 organisations — NotchStats shows that instead of inventing a number. When that
 key comes from OpenCode, a separate **Anthropic API** row totals your spend from
@@ -168,6 +172,9 @@ NotchStats lives in the menu bar (there is no Dock icon and no window).
   appears on the built-in notched display; when on, displays without a notch get
   a floating pill. It floats above the menu bar, so leave it off if it covers
   other windows.
+- **Allow Keychain Access (asks for your password once)** — off by default. Turn
+  this on only if `~/.claude/.credentials.json` does not exist and you want
+  NotchStats to read Claude's login from the macOS Keychain.
 - **Launch at Login** — start automatically when you log in.
 - **Quit NotchStats** (⌘Q).
 
@@ -205,9 +212,9 @@ display:
 - Countdowns are computed from `Date` rather than ticked, and nothing animates
   on a loop — a repeating animation would keep the window's display link active
   and stop the app ever idling.
-- No cost engine, no chart library, no updater. The only subprocess is a
-  short-lived, time-limited `security` lookup of the Claude login, at most once
-  every few minutes.
+- No cost engine, no chart library, no updater, and no background subprocesses
+  (credentials are read directly from disk or, when opted in, via non-interactive
+  Security framework calls).
 
 ## How it compares
 

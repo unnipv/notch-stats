@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **Claude login hardening & diagnostics.**
+  - Replaced deprecated `kSecUseAuthenticationUIFail` with `LAContext`
+    (`interactionNotAllowed = true` via `kSecUseAuthenticationContext`) on all
+    background Keychain probes and reads, removing the macOS deprecation
+    warnings while keeping background reads strictly non-interactive.
+  - When `~/.claude/.credentials.json` holds an expired OAuth token and
+    **Allow Keychain Access** is on, NotchStats now checks the Keychain for a
+    fresher login before reporting "Claude token expired".
+  - An explicitly cleared credential blob (`accessToken: ""`, `expiresAt: 0`,
+    written by Claude Code after `invalid_grant`) now reports **"Not signed in
+    to Claude"** instead of "Keychain access denied" or "Claude credentials
+    unreadable".
+  - An HTTP `401` from `/api/oauth/usage` now invalidates the cached token,
+    re-reads live sources, and retries once when a newly rotated token is
+    present, avoiding a false "Claude token rejected" flash during normal OAuth
+    refresh.
+  - HTTP 200 responses with a `rate_limit_error` JSON body now map to
+    `.rateLimited` (with backoff and dimmed last-reading preservation), matching
+    HTTP `429`.
+  - Honour `CLAUDE_CONFIG_DIR` when locating `.credentials.json`.
+  - Added read-only Keychain/lock diagnostic script
+    (`scripts/watch-claude-auth.sh`), Hermes external-login opt-out helper
+    (`scripts/fix-hermes-claude-auth.sh`), and
+    `docs/claude-login-troubleshooting.md`.
 - **NotchStats no longer asks for your keychain password.** The Claude lookup
   used `security find-generic-password -w`, which requests the secret and makes
   macOS prompt for the login password (the grant did not survive a rebuild).
