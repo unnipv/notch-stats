@@ -16,85 +16,69 @@ struct BarEntry: Identifiable {
     var id: String { provider.id }
 }
 
+/// Partitioning of bar entries between the left and right notch ears.
+enum BarLayout {
+    static let leftIDs: Set<String> = [CodexProvider.id, AntigravityProvider.id]
+
+    static func partition(_ entries: [BarEntry],
+                          leftIDs: Set<String> = leftIDs) -> (left: [BarEntry], right: [BarEntry]) {
+        (entries.filter { leftIDs.contains($0.provider.id) },
+         entries.filter { !leftIDs.contains($0.provider.id) })
+    }
+}
+
 struct BarView: View {
     let store: AppStore
     let geometry: IslandGeometry
     var detailed: Bool
 
-    /// Codex owns the left ear; Claude and OpenCode Go share the right one.
-    /// A provider with an error keeps its slot (as a warning) rather than
-    /// silently disappearing.
+    /// Codex and Gemini share the left ear; Claude and OpenCode Go share the
+    /// right one. A provider with an error keeps its slot (as a warning) rather
+    /// than silently disappearing.
     private var entries: [BarEntry] {
-        [(CodexProvider.id, AgentKind.codex),
+        [(CodexProvider.id, AgentKind.codex as AgentKind?),
+         (AntigravityProvider.id, nil),
          (ClaudeProvider.id, AgentKind.claude),
          (OpenCodeGoProvider.id, AgentKind.opencode)]
             .compactMap { id, kind in
                 guard let provider = store.provider(id),
                       provider.headline != nil || provider.error != nil else { return nil }
-                return BarEntry(provider: provider, live: store.isAgentLive(kind))
+                return BarEntry(provider: provider, live: kind.map { store.isAgentLive($0) } ?? false)
             }
     }
 
     var body: some View {
-        let codex = entries.first { $0.provider.id == CodexProvider.id }
-        let others = entries.filter { $0.provider.id != CodexProvider.id }
+        let ears = BarLayout.partition(entries)
 
         return Group {
             if geometry.hasNotch {
                 // The peek island is 70 pt wider; each ear gets half of it.
                 let ear = geometry.earWidth + (detailed ? 35 : 0)
                 HStack(spacing: 0) {
-                    LeftEar(entry: codex, detailed: detailed)
+                    EarStack(entries: ears.left, side: .left, detailed: detailed)
                         .frame(width: ear, alignment: .leading)
                     Spacer(minLength: 0)
-                    EarStack(entries: others, side: .right, detailed: detailed)
+                    EarStack(entries: ears.right, side: .right, detailed: detailed)
                         .frame(width: ear, alignment: .trailing)
                 }
             } else {
-                HStack(spacing: Theme.Space.l) {
+                HStack(spacing: entries.count > 3 ? Theme.Space.s : Theme.Space.l) {
                     ForEach(entries) { entry in
                         Ear(entry: entry,
-                            side: entry.provider.id == CodexProvider.id ? .left : .right,
+                            side: BarLayout.leftIDs.contains(entry.provider.id) ? .left : .right,
                             detailed: detailed)
                     }
                 }
-                .padding(.horizontal, Theme.Space.l)
+                .padding(.horizontal, entries.count > 3 ? Theme.Space.m : Theme.Space.l)
             }
         }
         .frame(maxHeight: .infinity)
     }
 }
 
-/// Codex owns the left ear. It shows its 5-hour and weekly windows as two
-/// rows built exactly like the right ear's, so both ears carry the same weight
-/// and the same ring size and stroke.
-private struct LeftEar: View {
-    let entry: BarEntry?
-    let detailed: Bool
-
-    var body: some View {
-        if let entry {
-            let windows = Array(entry.provider.windows.prefix(2))
-            if windows.count == 2 {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(windows) { window in
-                        CompactEarRow(entry: entry, window: window, side: .left, detailed: detailed)
-                    }
-                }
-                .padding(.horizontal, Theme.Space.m)
-            } else {
-                CompactEarRow(entry: entry, window: windows.first, side: .left, detailed: detailed)
-                    .padding(.horizontal, Theme.Space.m)
-            }
-        } else {
-            Circle().fill(Color.white.opacity(0.18)).frame(width: 6, height: 6)
-                .padding(.horizontal, Theme.Space.m)
-        }
-    }
-}
-
 /// An ear holding one or more indicators. Two providers stack vertically so
-/// the island can stay notch-wide.
+/// the island can stay notch-wide, and a single provider centres cleanly
+/// without leaving a gap or a stray ring.
 private struct EarStack: View {
     let entries: [BarEntry]
     var side: EarSide
@@ -105,6 +89,7 @@ private struct EarStack: View {
             Circle()
                 .fill(Color.white.opacity(0.18))
                 .frame(width: 6, height: 6)
+                .padding(.horizontal, Theme.Space.m)
         } else if entries.count == 1, let entry = entries.first {
             CompactEarRow(entry: entry, side: side, detailed: detailed)
                 .padding(.horizontal, Theme.Space.m)

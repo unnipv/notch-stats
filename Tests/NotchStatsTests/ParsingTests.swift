@@ -6,7 +6,7 @@ final class ParsingTests: XCTestCase {
 
     // MARK: - Codex
 
-    func testCodexParsesWindows() throws {
+    func testCodexParsesFiveHourWindowOnly() throws {
         let json = """
         {
           "plan_type": "plus",
@@ -21,12 +21,25 @@ final class ParsingTests: XCTestCase {
         XCTAssertNil(usage.error)
         XCTAssertEqual(usage.id, "codex")
         XCTAssertEqual(usage.note, "Plus plan")
-        XCTAssertEqual(usage.windows.count, 2)
+        XCTAssertEqual(usage.windows.count, 1)
+        XCTAssertEqual(usage.windows[0].id, "5h")
         XCTAssertEqual(usage.windows[0].label, "5h")
         XCTAssertEqual(usage.windows[0].percent, 0.87, accuracy: 0.0001)
-        XCTAssertEqual(usage.windows[1].label, "Weekly")
-        XCTAssertEqual(usage.windows[1].percent, 0.29, accuracy: 0.0001)
         XCTAssertNotNil(usage.windows[0].resetsAt)
+    }
+
+    func testCodexIgnoresSecondaryWeeklyWindowWhenPrimaryMissing() {
+        let json = """
+        {
+          "plan_type": "plus",
+          "rate_limit": {
+            "secondary_window": { "used_percent": 29, "reset_at": 1792652243, "limit_window_seconds": 604800 }
+          }
+        }
+        """
+        let usage = CodexProvider.parse(Data(json.utf8))
+        XCTAssertTrue(usage.windows.isEmpty)
+        XCTAssertEqual(usage.error, "No data")
     }
 
     func testCodexHandlesMissingWindows() {

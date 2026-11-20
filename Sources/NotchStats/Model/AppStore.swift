@@ -59,6 +59,7 @@ final class AppStore {
     private let engines: [UsageProvider] = [
         CodexProvider(),
         ClaudeProvider(),
+        AntigravityProvider(),
         AnthropicAPIProvider(),
         OpenCodeGoProvider(),
         OpenRouterProvider()
@@ -178,6 +179,8 @@ final class AppStore {
                 Task { @MainActor in
                     guard let self else { return }
                     ClaudeCredentials.invalidate()
+                    AntigravityCredentials.invalidate()
+                    AntigravityProvider.invalidateCache()
                     self.backoffs = [:]
                     self.sessionMonitor.refresh()
                     try? await Task.sleep(nanoseconds: 4_000_000_000)
@@ -206,6 +209,8 @@ final class AppStore {
 
         if force {
             ClaudeCredentials.invalidate()
+            AntigravityCredentials.invalidate()
+            AntigravityProvider.invalidateCache()
             backoffs = [:]
         }
 

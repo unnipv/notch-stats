@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **Antigravity / Gemini limits.**
+  - Added a read-only **Gemini** (`antigravity`) provider that reads your local
+    Antigravity (`agy`) / Gemini login without ever modifying, refreshing, or
+    prompting for Keychain passwords (`JETSKI_OAUTH_TOKEN`, then `agy`'s macOS
+    Keychain item `gemini` / `antigravity` via non-interactive `LAContext`, then
+    `~/.gemini/oauth_creds.json`, preferring any unexpired token).
+  - Calls `daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` once per
+    launch (cached for plan tier and project) and
+    `/v1internal:retrieveUserQuota` once per existing ~60s poll tick — showing
+    real `remainingFraction` and `resetTime` buckets (`Gemini` or `Pro`/`Flash`
+    plus `Partner` when 3P Claude/GPT buckets are present) and plan tier (e.g.
+    `Google AI Pro`), without inventing limits Google does not expose.
+  - Omitted cleanly when Antigravity / Gemini is not installed or signed in.
+  - Occupies the second slot on the left notch ear right under Codex.
+- **Codex now shows its 5-hour window only.**
+  - Dropped Codex's Weekly (`7d`) window from both the collapsed/peek notch bar
+    and the expanded panel; the vacated left-ear slot now belongs to Gemini.
+  - Replaced the Codex-specific two-window left ear with the shared `EarStack`
+    so a single-window provider centres cleanly with no gap, stray ring, or
+    panel-height change, and never duplicates its plan label inside a window
+    header.
 - **Claude login hardening & diagnostics.**
   - Replaced deprecated `kSecUseAuthenticationUIFail` with `LAContext`
     (`interactionNotAllowed = true` via `kSecUseAuthenticationContext`) on all

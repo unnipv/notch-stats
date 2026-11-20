@@ -15,7 +15,7 @@ struct AnthropicAPIProvider: UsageProvider {
     static let id = "anthropic-api"
     static let name = "Anthropic API"
     static let accent = "#D97757"
-    static let order = 2
+    static let order = 3
 
     var id: String { Self.id }
     var name: String { Self.name }

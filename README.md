@@ -8,9 +8,9 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 NotchStats is a tiny native macOS overlay that turns the notch into a
-Dynamic-Island-style surface. It shows how much of your ChatGPT/Codex and
-OpenCode Go allowance is left, your OpenRouter credit, and what your coding
-agents are doing right now — without you switching windows.
+Dynamic-Island-style surface. It shows how much of your ChatGPT/Codex, Claude,
+Antigravity/Gemini and OpenCode Go allowance is left, your OpenRouter credit,
+and what your coding agents are doing right now — without you switching windows.
 
 Hover the notch for a quick read. Click it for the full panel.
 
@@ -38,10 +38,14 @@ Hover the notch for a quick read. Click it for the full panel.
 All figures show **what's left**, not what's been used: a nearly-empty ring means
 you're almost out.
 
-- **Codex / ChatGPT limits** — the 5-hour and weekly windows, with reset timers.
+- **Codex / ChatGPT limits** — the 5-hour window, with reset timer.
 - **Claude limits** — the 5-hour and weekly windows when you sign in with a
   Pro/Max account. An API-key login has no usage limits, and NotchStats says so
   rather than showing a made-up number.
+- **Gemini / Antigravity limits** — real quota pools (`Gemini`, or `Pro` /
+  `Flash` when distinct, plus `Partner` for 3P Claude/GPT models) with reset
+  countdowns and plan tier from your local `agy` / Antigravity login. Omitted
+  when Antigravity isn't installed or signed in.
 - **Anthropic API spend** — if you use a pay-as-you-go Anthropic key from
   OpenCode, the month-to-date and today's spend, totalled from OpenCode's own
   per-message cost ledger. Anthropic has no public credit-balance endpoint, so
@@ -66,6 +70,7 @@ you're almost out.
   sessions.
 - Codex for Codex limits and Codex sessions.
 - Claude Code for Claude limits.
+- Antigravity (`agy` CLI / Antigravity IDE) or Gemini CLI for Gemini limits.
 
 ## Install
 
@@ -113,6 +118,7 @@ If a provider isn't set up, its row shows an actionable caption (for example
 | --- | --- | --- |
 | **Codex / ChatGPT** | Sign in with the Codex CLI: `codex login` | `~/.codex/auth.json` |
 | **Claude** | Sign in with Claude Code: `claude` | `~/.claude/.credentials.json` (the keychain only if you turn on **Allow Keychain Access**) |
+| **Gemini (Antigravity)** | Sign in with Antigravity (`agy` CLI or Antigravity IDE) or Gemini CLI | `JETSKI_OAUTH_TOKEN`, `agy` Keychain (`gemini` / `antigravity`, non-interactive), or `~/.gemini/oauth_creds.json` |
 | **Anthropic API** | Add an Anthropic API key in OpenCode (`/connect` → **Anthropic**, or `opencode auth login`) | `opencode.db` → `credential` (key) + per-message `cost` |
 | **OpenCode Go** | Subscribe to Go, then `/connect` in OpenCode (or `opencode auth login`) and pick **OpenCode Go** | `~/.local/share/opencode/opencode.db` → `credential` |
 | **OpenRouter** | Add your OpenRouter key in OpenCode's auth | `~/.local/share/opencode/opencode.db` → `credential` |
@@ -187,15 +193,17 @@ endpoints. Nothing is uploaded anywhere.
 | --- | --- |
 | Codex / ChatGPT limits | `~/.codex/auth.json` → `chatgpt.com/backend-api/wham/usage` |
 | Claude limits | `~/.claude/.credentials.json` → `api.anthropic.com/api/oauth/usage` |
+| Gemini / Antigravity limits | `agy` Keychain (`gemini`/`antigravity`) or `~/.gemini/oauth_creds.json` → `daily-cloudcode-pa.googleapis.com/v1internal:{loadCodeAssist,retrieveUserQuota}` |
 | Anthropic API spend | `opencode.db` → `session_message` (`cost` on `anthropic` assistant messages) |
 | OpenCode Go limits | `opencode.db` credential → `opencode.ai/zen/go/v1/usage` |
 | OpenRouter credit | `opencode.db` credential → `openrouter.ai/api/v1/credits` |
 | OpenCode sessions | read-only `~/.local/share/opencode/opencode.db` (`session_v2`, `session_message`) |
 | Codex sessions | tail of the newest `~/.codex/sessions/**/rollout-*.jsonl` |
 
-The usage endpoints for Codex, Claude and OpenCode Go are the same undocumented
-ones their own clients use, so they can change without notice — that's why
-NotchStats shows an explicit error caption rather than a wrong number.
+The usage endpoints for Codex, Claude, Gemini/Antigravity and OpenCode Go are
+the same undocumented ones their own clients use, so they can change without
+notice — that's why NotchStats shows an explicit error caption rather than a
+wrong number.
 
 ## Performance
 
@@ -229,8 +237,8 @@ subprocesses. That trade buys and costs:
   no socket, no API keys to paste. It reads what your CLIs already wrote.
 - **Read-only credentials.** It never rotates or rewrites your tokens, so it
   can't break your logins.
-- **Codex + Claude + Anthropic API + OpenCode Go + OpenRouter** in one place,
-  including OpenCode Go quota, which several notch apps don't have.
+- **Codex + Claude + Gemini + Anthropic API + OpenCode Go + OpenRouter** in one
+  place, including Antigravity/Gemini and OpenCode Go quotas.
 
 **Where others are ahead**
 

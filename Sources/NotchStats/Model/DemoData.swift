@@ -18,7 +18,7 @@ enum DemoData {
         case "empty": return []
         case "errors": return errorSet
         case "urgent": return urgentSet
-        case "three": return [healthy[0], healthy[1], healthy[3]]
+        case "three": return [healthy[0], healthy[1], healthy[2]]
         case "four": return Array(healthy.prefix(4))
         default: return healthy
         }
@@ -31,9 +31,7 @@ enum DemoData {
                 order: 0,
                 windows: [
                     UsageWindow(id: "5h", label: "5h", percent: 0.32,
-                                resetsAt: Date().addingTimeInterval(2 * 3600 + 22 * 60)),
-                    UsageWindow(id: "7d", label: "Weekly", percent: 0.21,
-                                resetsAt: Date().addingTimeInterval(4 * 86_400))
+                                resetsAt: Date().addingTimeInterval(2 * 3600 + 22 * 60))
                 ],
                 note: "Plus plan", error: nil),
 
@@ -49,16 +47,27 @@ enum DemoData {
                 note: "Max plan", error: nil),
 
             ProviderUsage(
+                id: AntigravityProvider.id, name: "Gemini", accentHex: AntigravityProvider.accent,
+                order: 2,
+                windows: [
+                    UsageWindow(id: "gemini", label: "Gemini", percent: 0.08,
+                                resetsAt: Date().addingTimeInterval(4 * 3600 + 18 * 60)),
+                    UsageWindow(id: "partner", label: "Partner", percent: 0.0,
+                                resetsAt: Date().addingTimeInterval(4 * 3600 + 55 * 60))
+                ],
+                note: "Google AI Pro", error: nil),
+
+            ProviderUsage(
                 id: AnthropicAPIProvider.id, name: "Anthropic API",
                 accentHex: AnthropicAPIProvider.accent,
-                order: 2,
+                order: 3,
                 windows: [],
                 note: "$12.40 spent this month · $1.85 today", error: nil,
                 metrics: [UsageMetric(label: "This month", value: "$12.40", detail: "$1.85 today")]),
 
             ProviderUsage(
                 id: OpenCodeGoProvider.id, name: "OpenCode Go", accentHex: OpenCodeGoProvider.accent,
-                order: 3,
+                order: 4,
                 windows: [
                     UsageWindow(id: "rolling", label: "5h", percent: 0.0,
                                 resetsAt: Date().addingTimeInterval(4 * 3600 + 59 * 60)),
@@ -71,7 +80,7 @@ enum DemoData {
 
             ProviderUsage(
                 id: OpenRouterProvider.id, name: "OpenRouter", accentHex: OpenRouterProvider.accent,
-                order: 4,
+                order: 5,
                 windows: [UsageWindow(id: "credits", label: "Credits", percent: 0.89, resetsAt: nil)],
                 note: "$3.26", error: nil)
         ]
@@ -83,9 +92,7 @@ enum DemoData {
             id: CodexProvider.id, name: "Codex", accentHex: CodexProvider.accent, order: 0,
             windows: [
                 UsageWindow(id: "5h", label: "5h", percent: 0.93,
-                            resetsAt: Date().addingTimeInterval(48 * 60)),
-                UsageWindow(id: "7d", label: "Weekly", percent: 0.78,
-                            resetsAt: Date().addingTimeInterval(2 * 86_400))
+                            resetsAt: Date().addingTimeInterval(48 * 60))
             ],
             note: "Plus plan", error: nil)
         return list
@@ -98,9 +105,9 @@ enum DemoData {
         return [
             stale,
             ClaudeProvider.expired(),
-            healthy[2],
+            healthy[3],
             .failure(id: OpenCodeGoProvider.id, name: "OpenCode Go", accentHex: OpenCodeGoProvider.accent,
-                     order: 3, message: "OpenCode token expired", hint: "Open OpenCode to refresh it",
+                     order: 4, message: "OpenCode token expired", hint: "Open OpenCode to refresh it",
                      issue: .rejected)
         ]
     }
