@@ -47,7 +47,12 @@ final class ClaudeTests: XCTestCase {
 
     func testRateLimitErrorBodyIsSurfaced() {
         let json = #"{ "error": { "type": "rate_limit_error", "message": "slow down" } }"#
-        XCTAssertEqual(ClaudeProvider.parse(Data(json.utf8)).error, "Rate limited")
+        let usage = ClaudeProvider.parse(Data(json.utf8))
+        XCTAssertEqual(usage.error, "Rate limited")
+        XCTAssertEqual(usage.issue, .rateLimited)
+        XCTAssertEqual(usage.hint, "Retrying shortly")
+        XCTAssertTrue(usage.issue?.backsOff ?? false)
+        XCTAssertTrue(usage.issue?.isTransient ?? false)
     }
 
     func testEmptyBodyIsNoData() {
@@ -110,5 +115,95 @@ final class ClaudeTests: XCTestCase {
         XCTAssertTrue(ClaudeProvider.isAPIOrganisationError(Data(json.utf8)))
         XCTAssertFalse(ClaudeProvider.isAPIOrganisationError(Data(#"{ "error": {} }"#.utf8)))
         XCTAssertFalse(ClaudeProvider.isAPIOrganisationError(Data("nope".utf8)))
+    }
+
+    // MARK: - 401 retry-once on OAuth token rotation
+
+    private let validUsageJSON = Data(#"{"five_hour":{"utilization":20.0},"seven_day":{"utilization":35.0}}"#.utf8)
+
+    func test401RetriesOnceWhenTokenRotatedAndSucceeds() async {
+        let oldCred = ClaudeCredentials.Credential(token: "sk-ant-oat01-old", kind: .oauth,
+                                                   expiresAt: Date().addingTimeInterval(3600))
+        let newCred = ClaudeCredentials.Credential(token: "sk-ant-oat01-new", kind: .oauth,
+                                                   expiresAt: Date().addingTimeInterval(28800))
+        let calls = Locked<(resolves: [Bool], authHeaders: [String])>(([], []))
+        let provider = ClaudeProvider(
+            resolve: { force in
+                calls.withLock { $0.resolves.append(force) }
+                return .found(force ? newCred : oldCred, force ? .file : .lastKnown)
+            },
+            transport: { request in
+                let auth = request.value(forHTTPHeaderField: "Authorization") ?? ""
+                calls.withLock { $0.authHeaders.append(auth) }
+                if auth == "Bearer sk-ant-oat01-old" { return (Data(), 401) }
+                return (self.validUsageJSON, 200)
+            })
+
+        let usage = await provider.fetch()
+        XCTAssertNil(usage?.error, "rotated token retry should succeed without flashing Rejected")
+        XCTAssertEqual(usage?.windows.count, 2)
+        let recorded = calls.withLock { $0 }
+        XCTAssertEqual(recorded.resolves, [false, true])
+        XCTAssertEqual(recorded.authHeaders, ["Bearer sk-ant-oat01-old", "Bearer sk-ant-oat01-new"])
+    }
+
+    func test401DoesNotRetryWhenTokenIsUnchanged() async {
+        let sameCred = ClaudeCredentials.Credential(token: "sk-ant-oat01-same", kind: .oauth,
+                                                    expiresAt: Date().addingTimeInterval(3600))
+        let requestCount = Locked(0)
+        let provider = ClaudeProvider(
+            resolve: { _ in .found(sameCred, .file) },
+            transport: { _ in
+                requestCount.withLock { $0 += 1 }
+                return (Data(), 401)
+            })
+
+        let usage = await provider.fetch()
+        XCTAssertEqual(usage?.issue, .rejected)
+        XCTAssertEqual(requestCount.withLock { $0 }, 1, "must not resend the exact same rejected token")
+    }
+
+    func test401RetriesAtMostOnceEvenIfNewTokenAlsoReturns401() async {
+        let first = ClaudeCredentials.Credential(token: "sk-ant-oat01-first", kind: .oauth,
+                                                 expiresAt: Date().addingTimeInterval(3600))
+        let second = ClaudeCredentials.Credential(token: "sk-ant-oat01-second", kind: .oauth,
+                                                  expiresAt: Date().addingTimeInterval(3600))
+        let requestCount = Locked(0)
+        let provider = ClaudeProvider(
+            resolve: { force in .found(force ? second : first, .file) },
+            transport: { _ in
+                requestCount.withLock { $0 += 1 }
+                return (Data(), 401)
+            })
+
+        let usage = await provider.fetch()
+        XCTAssertEqual(usage?.issue, .rejected)
+        XCTAssertEqual(requestCount.withLock { $0 }, 2, "retry must be bounded to a single attempt")
+    }
+
+    func test401WhenFileMidRewriteSurfacesTransientUnreadableInsteadOfRejected() async {
+        let cached = ClaudeCredentials.Credential(token: "sk-ant-oat01-cached", kind: .oauth,
+                                                  expiresAt: Date().addingTimeInterval(3600))
+        let provider = ClaudeProvider(
+            resolve: { force in force ? .missing(.fileUnreadable) : .found(cached, .lastKnown) },
+            transport: { _ in (Data(), 401) })
+
+        let usage = await provider.fetch()
+        XCTAssertEqual(usage?.issue, .unreadable,
+                       "mid-write credential file after 401 should stay transient so last reading stays dimmed")
+        XCTAssertTrue(usage?.issue?.isTransient ?? false)
+    }
+
+    func test401WhenReResolveSeesExpiredTokenReportsExpired() async {
+        let cached = ClaudeCredentials.Credential(token: "sk-ant-oat01-cached", kind: .oauth,
+                                                  expiresAt: Date().addingTimeInterval(3600))
+        let expired = ClaudeCredentials.Credential(token: "sk-ant-oat01-expired", kind: .oauth,
+                                                   expiresAt: Date().addingTimeInterval(-60))
+        let provider = ClaudeProvider(
+            resolve: { force in .found(force ? expired : cached, .file) },
+            transport: { _ in (Data(), 401) })
+
+        let usage = await provider.fetch()
+        XCTAssertEqual(usage?.issue, .tokenExpired)
     }
 }

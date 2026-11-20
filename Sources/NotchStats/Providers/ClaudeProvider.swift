@@ -22,18 +22,25 @@ struct ClaudeProvider: UsageProvider {
     var accentHex: String { Self.accent }
     var order: Int { Self.order }
 
-    func fetch() async -> ProviderUsage? {
-        let resolution = await ClaudeCredentials.resolveAsync()
+    typealias Resolver = @Sendable (_ force: Bool) async -> ClaudeCredentials.Resolution
+    typealias Transport = @Sendable (URLRequest) async throws -> (Data, Int)
 
-        guard case let .found(credential, _) = resolution else {
-            if case let .missing(failure) = resolution { return Self.failure(failure) }
-            return Self.failure(.notSignedIn)
-        }
+    private let resolve: Resolver
+    private let transport: Transport
 
-        // Don't spend a request on an OAuth token we already know is stale.
-        // Claude Code renews it itself; we re-read on the normal cadence.
-        if credential.isExpired() { return Self.expired() }
+    init(resolve: @escaping Resolver = { force in await ClaudeCredentials.resolveAsync(force: force) },
+         transport: @escaping Transport = { request in try await Self.liveTransport(request) }) {
+        self.resolve = resolve
+        self.transport = transport
+    }
 
+    private static func liveTransport(_ request: URLRequest) async throws -> (Data, Int) {
+        let (data, response) = try await HTTP.session.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        return (data, status)
+    }
+
+    private static func usageRequest(for credential: ClaudeCredentials.Credential) -> URLRequest {
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
         request.setValue("claude-code/2.1.301", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -45,14 +52,39 @@ struct ClaudeProvider: UsageProvider {
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         }
         request.timeoutInterval = 15
+        return request
+    }
+
+    func fetch() async -> ProviderUsage? {
+        let resolution = await resolve(false)
+
+        guard case let .found(credential, _) = resolution else {
+            if case let .missing(failure) = resolution { return Self.failure(failure) }
+            return Self.failure(.notSignedIn)
+        }
+
+        // Don't spend a request on an OAuth token we already know is stale.
+        // Claude Code renews it itself; we re-read on the normal cadence.
+        if credential.isExpired() { return Self.expired() }
 
         do {
-            let (data, response) = try await HTTP.session.data(for: request)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let (data, status) = try await transport(Self.usageRequest(for: credential))
             if status == 401 {
-                // The credential may have been rotated underneath us; forget
-                // the remembered one so the next attempt reads the sources again.
-                ClaudeCredentials.invalidate()
+                // The credential may have been rotated underneath us while the
+                // request was in flight (or served from `lastGood`). Re-read
+                // live sources once so a normal refresh never flashes "Rejected".
+                let freshResolution = await resolve(true)
+                switch freshResolution {
+                case let .found(fresh, _):
+                    if fresh.isExpired() { return Self.expired() }
+                    if fresh.token != credential.token {
+                        let (retryData, retryStatus) = try await transport(Self.usageRequest(for: fresh))
+                        if retryStatus == 401 { ClaudeCredentials.invalidate() }
+                        return Self.response(status: retryStatus, data: retryData, kind: fresh.kind)
+                    }
+                case let .missing(failure):
+                    return Self.failure(failure)
+                }
             }
             return Self.response(status: status, data: data, kind: credential.kind)
         } catch {
@@ -128,7 +160,7 @@ struct ClaudeProvider: UsageProvider {
         // The endpoint can also return 200 with an error body.
         if let error = object["error"] as? [String: Any],
            (error["type"] as? String) == "rate_limit_error" {
-            return failure("Rate limited")
+            return issue(.rateLimited, "Rate limited", "Retrying shortly")
         }
 
         var windows: [UsageWindow] = []
