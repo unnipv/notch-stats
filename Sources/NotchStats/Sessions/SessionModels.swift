@@ -61,7 +61,7 @@ enum SessionState: Equatable, Sendable {
     }
 }
 
-struct AgentSession: Identifiable, Sendable {
+struct AgentSession: Identifiable, Sendable, Equatable {
     let id: String
     let agent: AgentKind
     let title: String

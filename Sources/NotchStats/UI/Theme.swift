@@ -1,64 +1,116 @@
 import SwiftUI
 
+/// Design tokens. The island hangs off a black camera housing, so the whole
+/// surface is rendered in the dark appearance; text uses the system's
+/// hierarchical styles (`.primary` / `.secondary`) rather than hard-coded
+/// whites, and every spacing value is on a 4 pt grid.
 enum Theme {
     static let codex = Color(hex: "#10A37F")
     static let opencode = Color(hex: "#B47BFF")
     static let openrouter = Color(hex: "#7E8BF5")
-    static let warn = Color(hex: "#FFB020")
-    static let crit = Color(hex: "#FF5A4E")
-    static let subtext = Color.white.opacity(0.55)
-    static let faint = Color.white.opacity(0.35)
+    static let live = Color(hex: "#34C759")
 
+    // Warnings own two hues no provider accent can produce (accents are green,
+    // terracotta, purple and indigo), and in the panel they always come with a
+    // glyph as well, so colour never has to carry the meaning alone.
+    static let warn = Color(hex: "#FFD60A")
+    static let crit = Color(hex: "#FF3B6B")
+
+    /// Labels and countdowns: the second-most-read text on a row.
+    static let label = Color.white.opacity(0.88)
+    /// Decorative glyphs next to a label.
+    static let glyph = Color.white.opacity(0.65)
+    /// The unfilled part of a bar: enough to show how much is left.
+    static let track = Color.white.opacity(0.22)
+
+    /// Left and right margin shared by the header, the cards and the footer.
+    static let margin: CGFloat = 16
+
+    /// 4 pt rhythm.
+    enum Space {
+        static let xs: CGFloat = 4
+        static let s: CGFloat = 8
+        static let m: CGFloat = 12
+        static let l: CGFloat = 16
+    }
+
+    /// Colour for a window that is `percent` used: the provider's own accent
+    /// until it gets tight, then yellow, then pink-red — the same thresholds
+    /// everywhere (rings, bars, numbers).
     static func urgency(_ percent: Double, base: Color) -> Color {
         if percent >= 0.90 { return crit }
         if percent >= 0.75 { return warn }
         return base
     }
 
-    // MARK: - Panel surfaces
+    static func isUrgent(_ percent: Double) -> Bool { percent >= 0.75 }
 
-    /// Expanded-panel surface: pure black at the top so it melts into the
-    /// camera housing, easing into a deep graphite blue at the bottom edge.
-    static let panelGradient = LinearGradient(
-        colors: [Color.black, Color(hex: "#04060A"), Color(hex: "#0B111A")],
+    /// The shape cue that accompanies a warning colour in the panel.
+    static func urgencyGlyph(_ percent: Double) -> String? {
+        if percent >= 0.90 { return "exclamationmark.octagon.fill" }
+        if percent >= 0.75 { return "exclamationmark.triangle.fill" }
+        return nil
+    }
+
+    // MARK: - Surfaces
+
+    /// Expanded glass: `.ultraThinMaterial` with only a light black wash over it
+    /// (~0.30) so the desktop shows through the blur. The wash is fully opaque
+    /// through the menu-bar band — where the notch and the ears sit — and eases
+    /// out just below it.
+    static func glassWash(bandFraction: Double) -> LinearGradient {
+        LinearGradient(stops: [
+            .init(color: .black, location: 0),
+            .init(color: .black, location: bandFraction),
+            .init(color: .black.opacity(0.30), location: min(1, bandFraction + 0.05)),
+            .init(color: .black.opacity(0.30), location: 1)
+        ], startPoint: .top, endPoint: .bottom)
+    }
+
+    /// A soft shadow just under the notch band, so the opaque band doesn't end
+    /// in a hard line against the translucent panel.
+    static let notchShadow = LinearGradient(
+        colors: [Color.black.opacity(0.45), Color.black.opacity(0)],
         startPoint: .top, endPoint: .bottom)
 
-    /// Soft light spill from the top edge that makes the panel read as glass.
-    static let panelSheen = LinearGradient(
-        colors: [Color.white.opacity(0.06), Color.white.opacity(0)],
-        startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.16))
-
-    /// Edge hairline. Near-invisible when collapsed so the black ear blends
-    /// into the physical notch; a touch more present when expanded.
+    /// Edge hairline with a brighter highlight along the top.
     static func hairline(expanded: Bool) -> LinearGradient {
         LinearGradient(
-            colors: [Color.white.opacity(expanded ? 0.16 : 0.09),
-                     Color.white.opacity(expanded ? 0.05 : 0.03)],
+            colors: [Color.white.opacity(expanded ? 0.34 : 0.08),
+                     Color.white.opacity(expanded ? 0.10 : 0.03)],
             startPoint: .top, endPoint: .bottom)
     }
 
-    // MARK: - Cards
-
-    /// Row card fill: a faint top-lit wash of `tint` that lifts on hover.
-    static func card(hovering: Bool, tint: Color = .white, strength: Double = 1) -> LinearGradient {
-        let lift = hovering ? 1.6 : 1.0
-        return LinearGradient(
-            colors: [tint.opacity(0.062 * lift * strength),
-                     tint.opacity(0.034 * lift * strength)],
-            startPoint: .top, endPoint: .bottom)
+    /// Cards carry the legibility that the lighter wash no longer provides:
+    /// a stronger fill and stroke than they would need on flat black.
+    static func card(hovering: Bool) -> Color {
+        Color.white.opacity(hovering ? 0.15 : 0.11)
     }
 
-    static func cardStroke(hovering: Bool, tint: Color = .white, strength: Double = 1) -> Color {
-        tint.opacity((hovering ? 0.14 : 0.07) * strength)
+    static func cardStroke(hovering: Bool) -> Color {
+        Color.white.opacity(hovering ? 0.26 : 0.16)
     }
 }
 
 extension View {
-    /// Rolls monospaced numerals when the rendered value changes.
+    /// Rolls numerals when the value changes — unless Reduce Motion is on.
     func numericFlip(_ value: Double) -> some View {
-        self
-            .contentTransition(.numericText())
-            .animation(.easeOut(duration: 0.35), value: value)
+        modifier(NumericFlip(value: value))
+    }
+}
+
+private struct NumericFlip: ViewModifier {
+    let value: Double
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        if reduceMotion {
+            content
+        } else {
+            content
+                .contentTransition(.numericText())
+                .animation(.easeOut(duration: 0.3), value: value)
+        }
     }
 }
 

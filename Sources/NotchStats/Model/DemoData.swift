@@ -8,6 +8,23 @@ import Foundation
 enum DemoData {
 
     static var providers: [ProviderUsage] {
+        providers(variant: "1")
+    }
+
+    /// `1` is the healthy set; `errors`, `urgent` and `empty` exercise the other
+    /// states the panel has to look right in.
+    static func providers(variant: String) -> [ProviderUsage] {
+        switch variant {
+        case "empty": return []
+        case "errors": return errorSet
+        case "urgent": return urgentSet
+        case "three": return [healthy[0], healthy[1], healthy[3]]
+        case "four": return Array(healthy.prefix(4))
+        default: return healthy
+        }
+    }
+
+    private static var healthy: [ProviderUsage] {
         [
             ProviderUsage(
                 id: CodexProvider.id, name: "Codex", accentHex: CodexProvider.accent,
@@ -36,7 +53,8 @@ enum DemoData {
                 accentHex: AnthropicAPIProvider.accent,
                 order: 2,
                 windows: [],
-                note: "$12.40 spent this month · $1.85 today", error: nil),
+                note: "$12.40 spent this month · $1.85 today", error: nil,
+                metrics: [UsageMetric(label: "This month", value: "$12.40", detail: "$1.85 today")]),
 
             ProviderUsage(
                 id: OpenCodeGoProvider.id, name: "OpenCode Go", accentHex: OpenCodeGoProvider.accent,
@@ -56,6 +74,34 @@ enum DemoData {
                 order: 4,
                 windows: [UsageWindow(id: "credits", label: "Credits", percent: 0.89, resetsAt: nil)],
                 note: "$3.26", error: nil)
+        ]
+    }
+
+    private static var urgentSet: [ProviderUsage] {
+        var list = healthy
+        list[0] = ProviderUsage(
+            id: CodexProvider.id, name: "Codex", accentHex: CodexProvider.accent, order: 0,
+            windows: [
+                UsageWindow(id: "5h", label: "5h", percent: 0.93,
+                            resetsAt: Date().addingTimeInterval(48 * 60)),
+                UsageWindow(id: "7d", label: "Weekly", percent: 0.78,
+                            resetsAt: Date().addingTimeInterval(2 * 86_400))
+            ],
+            note: "Plus plan", error: nil)
+        return list
+    }
+
+    private static var errorSet: [ProviderUsage] {
+        var stale = healthy[0]
+        stale.isStale = true
+        stale.hint = "Can't reach ChatGPT"
+        return [
+            stale,
+            ClaudeProvider.expired(),
+            healthy[2],
+            .failure(id: OpenCodeGoProvider.id, name: "OpenCode Go", accentHex: OpenCodeGoProvider.accent,
+                     order: 3, message: "OpenCode token expired", hint: "Open OpenCode to refresh it",
+                     issue: .rejected)
         ]
     }
 

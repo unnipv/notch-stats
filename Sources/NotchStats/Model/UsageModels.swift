@@ -1,7 +1,7 @@
 import Foundation
 
 /// A single usage window (e.g. 5-hour, weekly, monthly).
-struct UsageWindow: Identifiable, Sendable {
+struct UsageWindow: Identifiable, Sendable, Equatable {
     let id: String
     let label: String
     /// Normalised fraction of the allowance *used*, in `0...1`.
@@ -14,8 +14,69 @@ struct UsageWindow: Identifiable, Sendable {
     var remaining: Double { max(0, min(1, 1 - percent)) }
 }
 
+/// A headline number that has no quota behind it — dollars spent, say — so it
+/// is shown as a figure rather than a gauge.
+struct UsageMetric: Equatable, Sendable {
+    let label: String
+    let value: String
+    var detail: String? = nil
+}
+
+/// Why a provider has no reading. Each case has its own caption and recovery
+/// hint, so "your login is gone" is never conflated with "the keychain was
+/// momentarily unreadable" or "you're offline".
+enum ProviderIssue: Equatable, Sendable {
+    /// No credential exists anywhere we look.
+    case notSignedIn
+    /// The keychain is locked or refused a read we were allowed to try.
+    case keychainDenied
+    /// A Claude login exists in the keychain, but "Allow Keychain Access" is off.
+    case keychainNotAllowed
+    /// A credentials file exists but can't be read yet (mid-rewrite).
+    case unreadable
+    /// The token's own `expiresAt` is in the past.
+    case tokenExpired
+    /// The server answered 401 / 403 for a token that looked valid.
+    case rejected
+    /// No answer from the network or the request timed out.
+    case unreachable
+    case rateLimited
+    /// A local database was busy; the next read will usually succeed.
+    case busy
+
+    /// One word for the cramped collapsed/peek bar.
+    var shortLabel: String {
+        switch self {
+        case .notSignedIn: return "Sign in"
+        case .keychainDenied, .keychainNotAllowed: return "Keychain"
+        case .unreadable: return "Retry"
+        case .tokenExpired: return "Expired"
+        case .rejected: return "Rejected"
+        case .unreachable: return "Offline"
+        case .rateLimited: return "Limited"
+        case .busy: return "Busy"
+        }
+    }
+
+    /// Worth retrying with growing delays rather than on every tick.
+    var backsOff: Bool {
+        switch self {
+        case .unreachable, .rateLimited: return true
+        default: return false
+        }
+    }
+
+    /// Keep showing the previous reading (marked stale) instead of an error.
+    var isTransient: Bool {
+        switch self {
+        case .unreachable, .rateLimited, .busy, .keychainDenied, .keychainNotAllowed, .unreadable: return true
+        default: return false
+        }
+    }
+}
+
 /// Everything we know about one provider at a point in time.
-struct ProviderUsage: Identifiable, Sendable {
+struct ProviderUsage: Identifiable, Sendable, Equatable {
     let id: String
     let name: String
     let accentHex: String
@@ -23,12 +84,33 @@ struct ProviderUsage: Identifiable, Sendable {
     let windows: [UsageWindow]
     let note: String?
     let error: String?
+    /// What the user can do about `error`.
+    var hint: String? = nil
+    var issue: ProviderIssue? = nil
+    /// The reading is from an earlier refresh because the latest one failed.
+    var isStale = false
+    var metrics: [UsageMetric] = []
 
     var headline: UsageWindow? { windows.first }
 
-    static func failure(id: String, name: String, accentHex: String, order: Int, message: String) -> ProviderUsage {
+    static func failure(id: String, name: String, accentHex: String, order: Int, message: String,
+                        hint: String? = nil, issue: ProviderIssue? = nil) -> ProviderUsage {
         ProviderUsage(id: id, name: name, accentHex: accentHex, order: order,
-                      windows: [], note: nil, error: message)
+                      windows: [], note: nil, error: message, hint: hint, issue: issue)
+    }
+
+    /// Folds a fresh result into the previous one. A transient failure keeps
+    /// the last good reading (flagged stale); a busy database with nothing to
+    /// fall back on produces no row at all.
+    static func merge(_ new: ProviderUsage, previous: ProviderUsage?) -> ProviderUsage? {
+        guard let issue = new.issue, issue.isTransient else { return new }
+        if let previous, previous.error == nil, !previous.windows.isEmpty || !previous.metrics.isEmpty {
+            var kept = previous
+            kept.isStale = true
+            kept.hint = new.error
+            return kept
+        }
+        return issue == .busy ? nil : new
     }
 }
 

@@ -14,9 +14,13 @@ struct CodexProvider: UsageProvider {
 
 
     func fetch() async -> ProviderUsage? {
-        guard let token = Self.accessToken() else {
-            return Self.failure("No credentials — run `codex login`")
+        var read = Self.readToken()
+        if read == .unreadable {
+            // `codex` rewrites auth.json in place; a read can land mid-write.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            read = Self.readToken()
         }
+        guard case let .token(token) = read else { return Self.failure(read) }
 
         var request = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -24,14 +28,38 @@ struct CodexProvider: UsageProvider {
         request.timeoutInterval = 15
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await HTTP.session.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if status == 401 { return Self.failure("Auth expired — run `codex login`") }
-            guard status == 200 else { return Self.failure("HTTP \(status)") }
-            return Self.parse(data)
+            return Self.response(status: status, data: data)
         } catch {
-            return Self.failure(error.localizedDescription)
+            return Self.issue(.unreachable, "Can't reach ChatGPT", "Check your connection — retrying")
         }
+    }
+
+    // MARK: - Failure states (unit-tested)
+
+    static func response(status: Int, data: Data) -> ProviderUsage {
+        switch status {
+        case 200: return parse(data)
+        case 401, 403: return issue(.rejected, "Codex login rejected", "Run `codex login`")
+        case 429: return issue(.rateLimited, "Rate limited", "Retrying shortly")
+        case 500...599: return issue(.unreachable, "ChatGPT unavailable", "HTTP \(status) — retrying")
+        default: return failure("HTTP \(status)")
+        }
+    }
+
+    static func failure(_ read: TokenRead) -> ProviderUsage {
+        switch read {
+        case .missing, .token:
+            return issue(.notSignedIn, "Not signed in to Codex", "Run `codex login`")
+        case .unreadable:
+            return issue(.busy, "Codex login unreadable", "auth.json was being rewritten — retrying")
+        }
+    }
+
+    private static func issue(_ issue: ProviderIssue, _ message: String, _ hint: String) -> ProviderUsage {
+        .failure(id: id, name: name, accentHex: accent, order: order,
+                 message: message, hint: hint, issue: issue)
     }
 
     // MARK: - Pure parsing (unit-tested)
@@ -64,13 +92,25 @@ struct CodexProvider: UsageProvider {
         return UsageWindow(id: id, label: label, percent: max(0, min(1, used / 100)), resetsAt: reset)
     }
 
-    static func accessToken() -> String? {
-        let path = NSHomeDirectory() + "/.codex/auth.json"
+    enum TokenRead: Equatable {
+        case token(String)
+        /// No auth file: the user isn't signed in.
+        case missing
+        /// The file exists but isn't valid yet (half-written, or an unexpected shape).
+        case unreadable
+    }
+
+    static func readToken(path: String = NSHomeDirectory() + "/.codex/auth.json") -> TokenRead {
+        guard FileManager.default.fileExists(atPath: path) else { return .missing }
         guard let data = FileManager.default.contents(atPath: path),
-              let any = try? JSONSerialization.jsonObject(with: data),
-              let object = any as? [String: Any],
+              let object = jsonObject(data),
               let tokens = object["tokens"] as? [String: Any],
-              let token = tokens["access_token"] as? String else { return nil }
-        return token
+              let token = tokens["access_token"] as? String, !token.isEmpty else { return .unreadable }
+        return .token(token)
+    }
+
+    static func accessToken() -> String? {
+        if case let .token(token) = readToken() { return token }
+        return nil
     }
 }

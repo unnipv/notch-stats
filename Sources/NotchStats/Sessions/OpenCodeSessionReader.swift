@@ -11,33 +11,113 @@ import SQLite3
 final class OpenCodeSessionReader {
     private let path: String
     private var db: OpaquePointer?
+    private var sessionsStmt: OpaquePointer?
+    private var lastMessageStmt: OpaquePointer?
+    private var versionStmt: OpaquePointer?
+
+    /// `PRAGMA data_version` at the last full read. It changes whenever another
+    /// connection commits, so an unchanged value means every row we hold is
+    /// still current and the queries (and the JSON decode of message bodies)
+    /// can be skipped.
+    private var lastVersion: Int64?
+    private var rows: [Row] = []
+    private(set) var queries = 0
+    private var sawBusy = false
+
+    /// Everything the DB told us about one session, before the clock is applied.
+    private struct Row {
+        var id: String
+        var title: String
+        var directory: String
+        var updatedAt: Date
+        var state: SessionState
+        var model: String?
+    }
 
     init(path: String = OpenCodeDB.databasePath) {
         self.path = path
     }
 
-    deinit {
+    deinit { close() }
+
+    private func close() {
+        sqlite3_finalize(sessionsStmt); sessionsStmt = nil
+        sqlite3_finalize(lastMessageStmt); lastMessageStmt = nil
+        sqlite3_finalize(versionStmt); versionStmt = nil
         if let db { sqlite3_close(db) }
+        db = nil
+        lastVersion = nil
     }
 
     private func connection() -> OpaquePointer? {
         if let db { return db }
         guard FileManager.default.fileExists(atPath: path) else { return nil }
-        var handle: OpaquePointer?
-        guard sqlite3_open_v2("file:\(path)?mode=ro", &handle,
-                              SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK else {
-            sqlite3_close(handle)
-            return nil
-        }
-        db = handle
-        return handle
+        db = OpenCodeDB.openReadOnly(path)
+        return db
+    }
+
+    private func prepare(_ sql: String, into slot: inout OpaquePointer?, db: OpaquePointer) -> OpaquePointer? {
+        if let slot { sqlite3_reset(slot); return slot }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        slot = stmt
+        return stmt
+    }
+
+    private func dataVersion(_ db: OpaquePointer) -> Int64? {
+        guard let stmt = prepare("pragma data_version", into: &versionStmt, db: db) else { return nil }
+        defer { sqlite3_reset(stmt) }
+        return sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int64(stmt, 0) : nil
     }
 
     // MARK: - Public
 
-    func sessions(limit: Int = 5) -> [AgentSession] {
-        guard let db = connection() else { return [] }
+    /// Newest live sessions. If the database is busy or briefly unreadable the
+    /// previous result is returned, so a row never vanishes mid-write.
+    func sessions(limit: Int = 5, now: Date = Date()) -> [AgentSession] {
+        guard let db = connection() else {
+            rows = []
+            return []
+        }
 
+        let version = dataVersion(db)
+        if version == nil || version != lastVersion {
+            switch load(db, limit: limit) {
+            case let .loaded(fresh):
+                rows = fresh
+                lastVersion = version
+            case .busy:
+                break
+            case .broken:
+                // The file was replaced or corrupted under us: reconnect next time.
+                close()
+                return derive(now: now)
+            }
+        }
+        return derive(now: now)
+    }
+
+    private func derive(now: Date) -> [AgentSession] {
+        rows.map { row in
+            var state = row.state
+            // A message that never completed but has been quiet for a while is
+            // no longer "working" — it was interrupted or abandoned.
+            if state.isActive, now.timeIntervalSince(row.updatedAt) > 15 * 60 { state = .done }
+            return AgentSession(id: row.id, agent: .opencode, title: row.title,
+                                project: projectName(row.directory), state: state,
+                                model: row.model, updatedAt: row.updatedAt)
+        }
+    }
+
+    private enum LoadResult {
+        case loaded([Row])
+        case busy
+        case broken
+    }
+
+    private func load(_ db: OpaquePointer, limit: Int) -> LoadResult {
+        queries += 1
+        sawBusy = false
         let sql = """
         select id, title, directory, time_updated, time_compacting, model
         from session_v2
@@ -45,13 +125,17 @@ final class OpenCodeSessionReader {
         order by time_updated desc
         limit ?
         """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
-        defer { sqlite3_finalize(stmt) }
+        guard let stmt = prepare(sql, into: &sessionsStmt, db: db) else { return .broken }
+        defer { sqlite3_reset(stmt) }
         sqlite3_bind_int(stmt, 1, Int32(limit))
 
-        var sessions: [AgentSession] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        var loaded: [Row] = []
+        while true {
+            let step = sqlite3_step(stmt)
+            if step == SQLITE_DONE { break }
+            if step == SQLITE_BUSY || step == SQLITE_LOCKED { return .busy }
+            guard step == SQLITE_ROW else { return .broken }
+
             let id = columnText(stmt, 0) ?? ""
             let title = columnText(stmt, 1) ?? "Untitled"
             let directory = columnText(stmt, 2) ?? ""
@@ -64,26 +148,14 @@ final class OpenCodeSessionReader {
             // `session_v2.time_updated` lags behind message activity, so prefer
             // whichever timestamp is newest.
             let updatedAt = Date(timeIntervalSince1970: max(sessionUpdated, last?.timeCreated ?? 0))
+            let state = Self.state(kind: last?.kind, message: last?.data, compacting: compacting)
 
-            var state = Self.state(kind: last?.kind, message: last?.data, compacting: compacting)
-            // A message that never completed but has been quiet for a while is
-            // no longer "working" — it was interrupted or abandoned.
-            if state.isActive, Date().timeIntervalSince(updatedAt) > 15 * 60 {
-                state = .done
-            }
-
-            sessions.append(AgentSession(
-                id: id,
-                agent: .opencode,
-                title: title,
-                project: projectName(directory),
-                state: state,
+            loaded.append(Row(
+                id: id, title: title, directory: directory, updatedAt: updatedAt, state: state,
                 model: shortModel((last?.data["model"] as? [String: Any])?["id"] as? String
-                                  ?? modelJSON?["id"] as? String),
-                updatedAt: updatedAt
-            ))
+                                  ?? modelJSON?["id"] as? String)))
         }
-        return sessions
+        return sawBusy ? .busy : .loaded(loaded)
     }
 
     // MARK: - State inference (unit-tested)
@@ -122,12 +194,13 @@ final class OpenCodeSessionReader {
 
     private func lastMessage(_ db: OpaquePointer, session: String)
         -> (kind: String, data: [String: Any], timeCreated: Double)? {
-        var stmt: OpaquePointer?
         let sql = "select type, data, time_created from session_message where session_id = ?1 order by seq desc limit 1"
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
-        defer { sqlite3_finalize(stmt) }
+        guard let stmt = prepare(sql, into: &lastMessageStmt, db: db) else { return nil }
+        defer { sqlite3_reset(stmt) }
         sqlite3_bind_text(stmt, 1, session, -1, SQLITE_TRANSIENT)
-        guard sqlite3_step(stmt) == SQLITE_ROW,
+        let step = sqlite3_step(stmt)
+        if step == SQLITE_BUSY || step == SQLITE_LOCKED { sawBusy = true }
+        guard step == SQLITE_ROW,
               let raw = columnText(stmt, 1),
               let data = jsonObject(raw) else { return nil }
         return (columnText(stmt, 0) ?? "", data, (columnDouble(stmt, 2) ?? 0) / 1000)

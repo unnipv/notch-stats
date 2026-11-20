@@ -12,6 +12,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusItem()
         store.start()
         dumpGeometryIfRequested()
+        snapshotIfRequested()
+    }
+
+    /// `NOTCHSTATS_SNAPSHOT=/path/out.png`: render the island once and quit.
+    private func snapshotIfRequested() {
+        guard let path = ProcessInfo.processInfo.environment["NOTCHSTATS_SNAPSHOT"] else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            island?.snapshot(to: URL(fileURLWithPath: path))
+            NSApp.terminate(nil)
+        }
     }
 
     private func dumpGeometryIfRequested() {
@@ -62,6 +73,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         external.state = store.showOnExternalDisplays ? .on : .off
         menu.addItem(external)
 
+        let keychain = NSMenuItem(title: "Allow Keychain Access (asks for your password once)",
+                                  action: #selector(toggleKeychainAccess), keyEquivalent: "")
+        keychain.target = self
+        keychain.state = store.allowKeychainAccess ? .on : .off
+        keychain.toolTip = "Off by default. NotchStats reads Claude's login from ~/.claude/.credentials.json. "
+            + "Turn this on only if that file doesn't exist: macOS will then ask for your login keychain "
+            + "password — choose Always Allow so it doesn't ask again."
+        menu.addItem(keychain)
+
         let login = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         login.target = self
         login.state = LaunchAtLogin.isEnabled ? .on : .off
@@ -90,6 +110,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.showOnExternalDisplays = enable
         sender.state = enable ? .on : .off
         island?.refreshDisplays()
+    }
+
+    @objc private func toggleKeychainAccess(_ sender: NSMenuItem) {
+        let enable = sender.state != .on
+        store.allowKeychainAccess = enable
+        sender.state = enable ? .on : .off
     }
 
     @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {

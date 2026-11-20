@@ -112,7 +112,7 @@ If a provider isn't set up, its row shows an actionable caption (for example
 | Provider | What you need first | Where NotchStats reads it |
 | --- | --- | --- |
 | **Codex / ChatGPT** | Sign in with the Codex CLI: `codex login` | `~/.codex/auth.json` |
-| **Claude** | Sign in with Claude Code: `claude` | macOS keychain (or `~/.claude/.credentials.json`) |
+| **Claude** | Sign in with Claude Code: `claude` | `~/.claude/.credentials.json` (the keychain only if you turn on **Allow Keychain Access**) |
 | **Anthropic API** | Add an Anthropic API key in OpenCode (`/connect` → **Anthropic**, or `opencode auth login`) | `opencode.db` → `credential` (key) + per-message `cost` |
 | **OpenCode Go** | Subscribe to Go, then `/connect` in OpenCode (or `opencode auth login`) and pick **OpenCode Go** | `~/.local/share/opencode/opencode.db` → `credential` |
 | **OpenRouter** | Add your OpenRouter key in OpenCode's auth | `~/.local/share/opencode/opencode.db` → `credential` |
@@ -129,12 +129,20 @@ you how to refresh it, not a blank row.
 **No special permissions.** The paths above are ordinary files in your home
 directory; macOS never asks for Full Disk Access or Accessibility.
 
-**Claude and the keychain.** NotchStats reads Claude's credential the same way
-Claude Code does — `/usr/bin/security find-generic-password` — falling back to
-the Security framework and then `~/.claude/.credentials.json`. The result is
-cached for a few minutes so it isn't re-read on every refresh. (Reading the
-keychain through the framework alone makes macOS ask for your login keychain
-password, which this order avoids.) If you sign in with an **API key** rather
+**Claude and the keychain.** NotchStats reads Claude's login from
+`~/.claude/.credentials.json` (or `CLAUDE_CODE_OAUTH_TOKEN`) — a plain file, so
+macOS never asks for a password. It does **not** use `security
+find-generic-password -w` or any other call that asks the keychain for the
+secret, because that is what makes macOS demand your login keychain password
+(and the grant is lost whenever the app is rebuilt). If the file is missing but
+the keychain holds a Claude login, the Claude row says *"Claude login found, not
+readable"* with a pointer to the menu. There, **Allow Keychain Access (asks for
+your password once)** — off by default, remembered in `UserDefaults` — lets
+NotchStats read the keychain item; macOS asks for your login password when you
+turn it on, so choose **Always Allow**. With it off, the only keychain call is
+an attributes-only check that an item exists, which cannot prompt. A missing or
+half-written file keeps the last good token for two minutes instead of dropping
+the row. If you sign in with an **API key** rather
 than a Pro/Max account, Anthropic reports that usage limits don't apply to API
 organisations — NotchStats shows that instead of inventing a number. When that
 key comes from OpenCode, a separate **Anthropic API** row totals your spend from
@@ -171,7 +179,7 @@ endpoints. Nothing is uploaded anywhere.
 | Widget | Source |
 | --- | --- |
 | Codex / ChatGPT limits | `~/.codex/auth.json` → `chatgpt.com/backend-api/wham/usage` |
-| Claude limits | keychain → `api.anthropic.com/api/oauth/usage` |
+| Claude limits | `~/.claude/.credentials.json` → `api.anthropic.com/api/oauth/usage` |
 | Anthropic API spend | `opencode.db` → `session_message` (`cost` on `anthropic` assistant messages) |
 | OpenCode Go limits | `opencode.db` credential → `opencode.ai/zen/go/v1/usage` |
 | OpenRouter credit | `opencode.db` credential → `openrouter.ai/api/v1/credits` |
@@ -187,13 +195,19 @@ NotchStats shows an explicit error caption rather than a wrong number.
 Designed to be invisible. Measured on a MacBook Air M2 with a notched built-in
 display:
 
-- **~0.5% CPU idle, ~22 MB physical footprint.**
-- Sessions refresh every 2.5s with a handful of indexed SQLite reads; usage
-  refreshes every ~60s with jitter.
+- **~0.1–0.2% CPU idle, ~21 MB physical footprint** (60 s `scripts/cpu.sh`
+  windows and `vmmap`, release build, notched M-series display; 4–5 threads, no
+  child processes after 10 minutes). The same method measured 0.6–0.8% before
+  the performance pass.
+- Sessions refresh every 2.5s while something is working or the panel is open
+  and every 6s otherwise, and only re-read a database when it has changed;
+  usage refreshes every ~60s with jitter, staggered across providers.
 - Countdowns are computed from `Date` rather than ticked, and nothing animates
   on a loop — a repeating animation would keep the window's display link active
   and stop the app ever idling.
-- No cost engine, no chart library, no updater, no background subprocesses.
+- No cost engine, no chart library, no updater. The only subprocess is a
+  short-lived, time-limited `security` lookup of the Claude login, at most once
+  every few minutes.
 
 ## How it compares
 
@@ -202,7 +216,7 @@ subprocesses. That trade buys and costs:
 
 **Where it wins**
 
-- **Light.** ~0.5% CPU / ~22 MB, versus the cost-engine, chart-library and
+- **Light.** ~0.2% CPU / ~21 MB, versus the cost-engine, chart-library and
   auto-updater stacks many notch apps carry.
 - **Zero-config.** No hooks installed into your agent configs, no bridge binary,
   no socket, no API keys to paste. It reads what your CLIs already wrote.
@@ -245,13 +259,21 @@ swift test           # unit tests
 ./scripts/make-icns.sh
 ```
 
-Test hooks (development only):
+Test hooks (development only — every one is read from the environment at
+launch, so a normal launch from Finder or at login never runs any of them; the
+snapshot renders the view without the window blur, so it cannot show the glass):
 
 ```sh
 NOTCHSTATS_STATE=collapsed|peek|expanded
 NOTCHSTATS_PAGE=activity
 NOTCHSTATS_DEBUG_BG=1     # tint the island so its bounds are visible in screenshots
 NOTCHSTATS_DUMP=1         # print notch geometry + status item state to stderr
+NOTCHSTATS_DEMO=1|errors|urgent|empty|three|four
+                          # fictional data, no network or file reads; the variants
+                          # exercise error, tight-quota, empty and fewer-row panels
+NOTCHSTATS_SNAPSHOT=/path/out.png
+                          # render the island once over a stand-in wallpaper, write a
+                          # PNG and quit (no screen-recording permission needed)
 scripts/cpu.sh <pid> 10   # true CPU usage over a window
 ```
 

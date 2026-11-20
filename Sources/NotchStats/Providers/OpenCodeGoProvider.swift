@@ -24,9 +24,18 @@ struct OpenCodeGoProvider: UsageProvider {
 
 
     func fetch() async -> ProviderUsage? {
-        guard let credential = OpenCodeDB.credentialJSON(integrationIDs: ["opencode-go", "opencode"]),
-              let token = (credential["access"] as? String) ?? (credential["key"] as? String) else {
-            return Self.failure("No OpenCode credential")
+        let lookup = OpenCodeDB.lookupCredential(integrationIDs: ["opencode-go", "opencode"])
+        let credential: [String: Any]
+        switch lookup {
+        case .unavailable:
+            return Self.issue(.busy, "OpenCode database busy", "Retrying shortly")
+        case .none:
+            return Self.issue(.notSignedIn, "No OpenCode credential", "Sign in with `opencode auth login`")
+        case let .found(json):
+            credential = json
+        }
+        guard let token = (credential["access"] as? String) ?? (credential["key"] as? String) else {
+            return Self.issue(.notSignedIn, "No OpenCode credential", "Sign in with `opencode auth login`")
         }
 
         var request = URLRequest(url: URL(string: "https://opencode.ai/zen/go/v1/usage")!)
@@ -34,14 +43,27 @@ struct OpenCodeGoProvider: UsageProvider {
         request.timeoutInterval = 15
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await HTTP.session.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if status == 401 { return Self.failure("Token expired — open OpenCode to refresh") }
-            guard status == 200 else { return Self.failure("HTTP \(status)") }
-            return Self.parse(data)
+            return Self.response(status: status, data: data)
         } catch {
-            return Self.failure(error.localizedDescription)
+            return Self.issue(.unreachable, "Can't reach OpenCode", "Check your connection — retrying")
         }
+    }
+
+    static func response(status: Int, data: Data) -> ProviderUsage {
+        switch status {
+        case 200: return parse(data)
+        case 401, 403: return issue(.rejected, "OpenCode token expired", "Open OpenCode to refresh it")
+        case 429: return issue(.rateLimited, "Rate limited", "Retrying shortly")
+        case 500...599: return issue(.unreachable, "OpenCode unavailable", "HTTP \(status) — retrying")
+        default: return failure("HTTP \(status)")
+        }
+    }
+
+    private static func issue(_ issue: ProviderIssue, _ message: String, _ hint: String) -> ProviderUsage {
+        .failure(id: id, name: name, accentHex: accent, order: order,
+                 message: message, hint: hint, issue: issue)
     }
 
     // MARK: - Pure parsing (unit-tested)

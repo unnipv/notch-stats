@@ -23,9 +23,18 @@ struct AnthropicAPIProvider: UsageProvider {
     var order: Int { Self.order }
 
     func fetch() async -> ProviderUsage? {
-        guard OpenCodeDB.hasAnthropicAPIKey() else { return nil }
-        guard let spend = OpenCodeDB.anthropicSpend() else {
-            return Self.failure("Can't read OpenCode usage")
+        switch OpenCodeDB.anthropicKeyState() {
+        case .none:
+            return nil
+        case .unavailable:
+            return .failure(id: Self.id, name: Self.name, accentHex: Self.accent, order: Self.order,
+                            message: "OpenCode database busy", hint: "Retrying shortly", issue: .busy)
+        case .apiKey:
+            break
+        }
+        guard let spend = AnthropicSpendLedger.shared.update() else {
+            return .failure(id: Self.id, name: Self.name, accentHex: Self.accent, order: Self.order,
+                            message: "Can't read OpenCode usage", hint: "Retrying shortly", issue: .busy)
         }
         return Self.usage(spend)
     }
@@ -34,7 +43,10 @@ struct AnthropicAPIProvider: UsageProvider {
 
     static func usage(_ spend: OpenCodeDB.AnthropicSpend) -> ProviderUsage {
         ProviderUsage(id: id, name: name, accentHex: accent, order: order,
-                      windows: [], note: note(spend), error: nil)
+                      windows: [], note: note(spend), error: nil,
+                      metrics: [UsageMetric(label: "This month",
+                                            value: money(spend.monthToDate),
+                                            detail: spend.today > 0 ? "\(money(spend.today)) today" : nil)])
     }
 
     static func note(_ spend: OpenCodeDB.AnthropicSpend) -> String {

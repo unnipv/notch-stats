@@ -10,12 +10,12 @@ struct ActivityView: View {
                     if store.sessions.isEmpty {
                         empty
                     } else {
-                        VStack(spacing: 10) {
+                        VStack(spacing: AppStore.rowSpacing) {
                             ForEach(store.sessions) { session in
                                 SessionRow(session: session)
                             }
                         }
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, Theme.margin)
                     }
                 }
                 .mask(fadeMask(height: proxy.size.height))
@@ -35,25 +35,8 @@ struct ActivityView: View {
     }
 
     private var empty: some View {
-        VStack(spacing: 10) {
-            ZStack {
-                Circle()
-                    .fill(Color.white.opacity(0.05))
-                    .frame(width: 44, height: 44)
-                Image(systemName: "moon.zzz")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Theme.subtext)
-            }
-            VStack(spacing: 3) {
-                Text("No active sessions")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                Text("Agent sessions will appear here as you work")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Theme.faint)
-            }
-        }
-        .frame(maxWidth: .infinity)
+        PanelMessage(symbol: "moon.zzz", title: "No active sessions",
+                     detail: "Agent sessions appear here as you work")
     }
 }
 
@@ -65,62 +48,56 @@ struct SessionRow: View {
     private var live: Bool { session.isLive() }
 
     var body: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: Theme.Space.m) {
             statusGlyph
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.title)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Text(subtitle)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(live ? accent.opacity(0.95) : Theme.subtext)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.label)
                     .lineLimit(1)
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: Theme.Space.s)
 
-            HStack(spacing: 5) {
-                if live {
-                    Circle()
-                        .fill(accent)
-                        .frame(width: 4, height: 4)
-                }
-                Text(Format.ago(session.updatedAt))
-                    .font(.system(size: 10, design: .rounded))
-                    .foregroundStyle(live ? accent.opacity(0.8) : Theme.faint)
-            }
+            Text(Format.ago(session.updatedAt))
+                .font(.system(size: 11))
+                .monospacedDigit()
+                .foregroundStyle(live ? Theme.live : Theme.label)
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 10)
+        .padding(.horizontal, Theme.Space.m)
+        .frame(height: AppStore.sessionRowHeight)
         .background(
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(Theme.card(hovering: hovering, tint: live ? accent : .white, strength: live ? 1.5 : 1))
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Theme.card(hovering: hovering))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .strokeBorder(Theme.cardStroke(hovering: hovering,
-                                                       tint: live ? accent : .white,
-                                                       strength: live ? 2.2 : 1),
-                                      lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Theme.cardStroke(hovering: hovering), lineWidth: 0.5)
                 )
         )
-        .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.15), value: hovering)
+        .animation(.easeOut(duration: 0.12), value: hovering)
         .onTapGesture { TerminalFocus.focusFrontmostTerminal() }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(session.title), \(session.agent.displayName), \(session.state.label), \(Format.ago(session.updatedAt))")
+        .accessibilityHint("Brings your terminal forward")
+        .accessibilityAddTraits(.isButton)
     }
 
+    /// Static glyph — a working session is marked by colour and a filled disc,
+    /// never by a looping animation.
     private var statusGlyph: some View {
         ZStack {
             Circle()
-                .fill(accent.opacity(live ? 0.20 : 0.10))
-                .frame(width: 26, height: 26)
+                .fill(accent.opacity(live ? 0.22 : 0.10))
+                .frame(width: 28, height: 28)
             Image(systemName: session.state.symbol)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(live ? accent : Theme.subtext)
-                .contentTransition(.symbolEffect(.replace))
-                .symbolEffect(.pulse, options: .repeating.speed(0.5), isActive: live)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(live ? accent : Theme.label)
         }
     }
 
