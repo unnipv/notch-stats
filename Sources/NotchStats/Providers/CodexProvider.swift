@@ -73,7 +73,6 @@ struct CodexProvider: UsageProvider {
         let rateLimit = object["rate_limit"] as? [String: Any] ?? [:]
         var windows: [UsageWindow] = []
         if let window = window(id: "5h", label: "5h", rateLimit["primary_window"]) { windows.append(window) }
-        if let window = window(id: "7d", label: "Weekly", rateLimit["secondary_window"]) { windows.append(window) }
 
         let plan = object["plan_type"] as? String
         return ProviderUsage(id: id, name: name, accentHex: accent, order: order,

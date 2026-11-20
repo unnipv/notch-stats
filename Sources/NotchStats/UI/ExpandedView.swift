@@ -97,7 +97,7 @@ struct ExpandedView: View {
                         Text(failing == 1 ? "1 needs attention" : "\(failing) need attention")
                     } else if !store.providers.isEmpty {
                         Circle().fill(Theme.live).frame(width: 6, height: 6)
-                        Text("\(store.providers.count) providers")
+                        Text(store.providers.count == 1 ? "1 provider" : "\(store.providers.count) providers")
                     }
                     Spacer(minLength: 0)
                     if let next = store.providers.filter({ $0.error == nil })

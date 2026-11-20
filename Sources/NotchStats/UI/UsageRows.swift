@@ -118,11 +118,24 @@ struct ProviderRow: View {
     }
 
     /// A window without a reset time (credits) shows the provider's own note —
-    /// the dollar balance — where a countdown would go.
-    private func detail(for window: UsageWindow) -> WindowFigure.Detail? {
-        if let reset = Format.countdown(to: window.resetsAt) { return .reset(reset) }
-        if provider.windows.count == 1, let note = provider.note { return .text(note) }
+    /// the dollar balance — where a countdown would go, unless that note is a
+    /// plan label already shown under the provider's name.
+    static func detail(for window: UsageWindow, in provider: ProviderUsage,
+                       now: Date = Date()) -> WindowFigure.Detail? {
+        if let reset = Format.countdown(to: window.resetsAt, now: now) { return .reset(reset) }
+        if provider.windows.count == 1, planLabel(for: provider) == nil, let note = provider.note {
+            return .text(note)
+        }
         return nil
+    }
+
+    static func planLabel(for provider: ProviderUsage) -> String? {
+        guard provider.error == nil, !provider.windows.isEmpty else { return nil }
+        return provider.note.flatMap { $0.hasSuffix("plan") || provider.id == ClaudeProvider.id ? $0 : nil }
+    }
+
+    private func detail(for window: UsageWindow) -> WindowFigure.Detail? {
+        Self.detail(for: window, in: provider)
     }
 
     private var identity: some View {
@@ -150,7 +163,7 @@ struct ProviderRow: View {
         if provider.isStale { return "Last reading" }
         guard provider.error == nil else { return nil }
         if provider.windows.isEmpty { return provider.metrics.isEmpty ? provider.note : "API usage" }
-        return provider.note.flatMap { $0.hasSuffix("plan") || provider.id == ClaudeProvider.id ? $0 : nil }
+        return Self.planLabel(for: provider)
     }
 
     private func failure(_ message: String) -> some View {
@@ -195,7 +208,7 @@ struct ProviderRow: View {
 /// the figure, and a hairline bar underneath. A tight window turns the figure
 /// and bar warning-coloured *and* gains a glyph.
 struct WindowFigure: View {
-    enum Detail {
+    enum Detail: Equatable {
         case reset(String)
         case text(String)
     }

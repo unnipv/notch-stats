@@ -31,9 +31,7 @@ enum DemoData {
                 order: 0,
                 windows: [
                     UsageWindow(id: "5h", label: "5h", percent: 0.32,
-                                resetsAt: Date().addingTimeInterval(2 * 3600 + 22 * 60)),
-                    UsageWindow(id: "7d", label: "Weekly", percent: 0.21,
-                                resetsAt: Date().addingTimeInterval(4 * 86_400))
+                                resetsAt: Date().addingTimeInterval(2 * 3600 + 22 * 60))
                 ],
                 note: "Plus plan", error: nil),
 
@@ -83,9 +81,7 @@ enum DemoData {
             id: CodexProvider.id, name: "Codex", accentHex: CodexProvider.accent, order: 0,
             windows: [
                 UsageWindow(id: "5h", label: "5h", percent: 0.93,
-                            resetsAt: Date().addingTimeInterval(48 * 60)),
-                UsageWindow(id: "7d", label: "Weekly", percent: 0.78,
-                            resetsAt: Date().addingTimeInterval(2 * 86_400))
+                            resetsAt: Date().addingTimeInterval(48 * 60))
             ],
             note: "Plus plan", error: nil)
         return list
