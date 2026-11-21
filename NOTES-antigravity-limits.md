@@ -13,7 +13,23 @@ NotchStats never writes, refreshes, rotates, copies, locks, or deletes any Gemin
 Sources checked in order by `AntigravityCredentials`:
 
 1. **`JETSKI_OAUTH_TOKEN` environment variable** (same override honoured by `agy`).
-2. **macOS login Keychain item written by `agy`:**
+2. **`~/.gemini/antigravity-cli/antigravity-oauth-token`** (`agy` ≥ 1.5.14):
+   - **Breaking change in `agy` 1.5.14 (found 2026-11-21):** `agy` stopped
+     writing the `svce=gemini, acct=antigravity` Keychain item entirely and now
+     stores its login as a plain `0600` file, same `StoredToken` JSON shape the
+     Keychain payload used (plain JSON — no `go-keyring-base64:` prefix):
+     ```json
+     { "token": { "access_token": "<REDACTED>", "expiry": "2026-11-21T15:31:30.279391+05:30",
+       "token_type": "Bearer", "refresh_token": "<REDACTED>" },
+       "auth_method": "consumer", "id_token_email": "<REDACTED_EMAIL>" }
+     ```
+   - With the pre-1.5.14 build of NotchStats this file is invisible, so the row
+     falls back to the expired `~/.gemini/oauth_creds.json` token and reports
+     **"Gemini token expired"** even right after a fresh `agy` login. The fix
+     reads this file (freshest unexpired token wins across both plain files).
+   - The file honours the home directory only; `GEMINI_CLI_HOME` does not
+     relocate Antigravity's own data dir.
+3. **macOS login Keychain item written by pre-1.5.14 `agy`:**
    - `kSecClassGenericPassword`, `svce = "gemini"`, `acct = "antigravity"`.
    - `agy` uses `zalando/go-keyring`, which stores the JSON payload base64-encoded with a `go-keyring-base64:` prefix.
    - Verified with an ad-hoc signed standalone Swift binary that `SecItemCopyMatching` with `interactionNotAllowed = true` returns `errSecSuccess` (`0`) with zero UI prompt.
@@ -32,7 +48,7 @@ Sources checked in order by `AntigravityCredentials`:
        "writer_id": "<REDACTED_WRITER_ID>"
      }
      ```
-3. **Plain file fallback (`~/.gemini/oauth_creds.json`, honouring `GEMINI_CLI_HOME`):**
+4. **Plain file fallback (`~/.gemini/oauth_creds.json`, honouring `GEMINI_CLI_HOME`):**
    - Used by Gemini CLI (`gemini`) and file-based fallback setups.
    - Redacted shape:
      ```json

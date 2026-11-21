@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Gemini row works with `agy` ≥ 1.5.14 again.**
+  - `agy` 1.5.14 stopped writing the `svce=gemini, acct=antigravity` Keychain
+    item and now stores its login as a plain `0600` file,
+    `~/.gemini/antigravity-cli/antigravity-oauth-token` (same `StoredToken`
+    JSON shape, without the `go-keyring-base64:` wrapper). NotchStats only
+    knew the Keychain item and the stale `~/.gemini/oauth_creds.json`
+    (June-2025 token), so the Gemini row reported **"token expired"** even
+    immediately after a fresh `agy` login.
+  - Both plain files are now read on every poll with the freshest token
+    winning (any unexpired token beats an expired one; otherwise the latest
+    `expiry` wins), so a re-login via `agy` is picked up on the next tick.
+    Still zero Keychain secret reads and strictly read-only.
+
 - **Zero keychain password prompts during background polling.**
   - Background polling (`AppStore` refresh → provider `fetch()`) now performs
     **zero** Keychain secret reads (`kSecReturnData`). Plain CLI files

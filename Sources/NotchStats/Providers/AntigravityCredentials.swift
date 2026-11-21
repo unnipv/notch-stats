@@ -8,7 +8,10 @@ import Security
 ///
 /// Sources, tried in order on every poll (zero `kSecReturnData` calls):
 /// 1. `JETSKI_OAUTH_TOKEN` environment variable (matches `agy` CLI),
-/// 2. `~/.gemini/oauth_creds.json` (honouring `GEMINI_CLI_HOME`) — plain file,
+/// 2. Plain files, freshest token wins:
+///    `~/.gemini/antigravity-cli/antigravity-oauth-token` (`agy` ≥ 1.5.14
+///    login, formerly a Keychain item) and
+///    `~/.gemini/oauth_creds.json` (honouring `GEMINI_CLI_HOME`),
 /// 3. App-private `0600` snapshot under
 ///    `~/Library/Application Support/NotchStats/credentials/gemini.json`
 ///    (written only when the user clicks "Capture Gemini login…"),
@@ -436,6 +439,18 @@ enum AntigravityCredentials {
 
         enum Interaction { case fail, allow }
 
+        /// Resolves `~/.gemini/antigravity-cli/antigravity-oauth-token`, where
+        /// `agy` ≥ 1.5.14 stores its login as plain `StoredToken` JSON
+        /// (replacing the pre-1.5.14 Keychain item `svce=gemini`,
+        /// `acct=antigravity`). The file honours the home directory only;
+        /// `GEMINI_CLI_HOME` is a Gemini-CLI concept and does not relocate
+        /// Antigravity's own data dir.
+        static func antigravityTokenFilePath(homeDirectory: String = NSHomeDirectory()) -> String {
+            let geminiDir = (homeDirectory as NSString).appendingPathComponent(".gemini")
+            return ((geminiDir as NSString).appendingPathComponent("antigravity-cli") as NSString)
+                .appendingPathComponent("antigravity-oauth-token")
+        }
+
         /// Resolves `~/.gemini/oauth_creds.json`, honouring `GEMINI_CLI_HOME`.
         static func credentialsFilePath(environment: [String: String] = ProcessInfo.processInfo.environment,
                                         homeDirectory: String = NSHomeDirectory()) -> String {
@@ -453,10 +468,36 @@ enum AntigravityCredentials {
 
         static func liveFileRead(environment: [String: String] = ProcessInfo.processInfo.environment,
                                  homeDirectory: String = NSHomeDirectory()) -> FileRead {
-            let path = credentialsFilePath(environment: environment, homeDirectory: homeDirectory)
-            guard FileManager.default.fileExists(atPath: path) else { return .absent }
-            guard let data = FileManager.default.contents(atPath: path), !data.isEmpty else { return .unreadable }
-            return .data(data)
+            // Both plain-file sources, in preference order: the live `agy`
+            // login first, then the legacy Gemini CLI credentials file.
+            let paths = [antigravityTokenFilePath(homeDirectory: homeDirectory),
+                         credentialsFilePath(environment: environment, homeDirectory: homeDirectory)]
+            var unreadable = false
+            var best: (data: Data, expiry: TimeInterval, expired: Bool)?
+            for path in paths {
+                guard FileManager.default.fileExists(atPath: path) else { continue }
+                guard let data = FileManager.default.contents(atPath: path), !data.isEmpty else {
+                    unreadable = true
+                    continue
+                }
+                guard case let .credential(credential) = parseCredential(from: data) else {
+                    unreadable = true
+                    continue
+                }
+                let expiry = credential.expiresAt?.timeIntervalSince1970 ?? 0
+                let expired = credential.isExpired()
+                // Prefer any unexpired token, and among equal liveness the
+                // freshest expiry, so a re-login always wins over a stale file.
+                if let current = best {
+                    let preferred = current.expired != expired
+                        ? !expired
+                        : expiry > current.expiry
+                    guard preferred else { continue }
+                }
+                best = (data, expiry, expired)
+            }
+            if let best { return .data(best.data) }
+            return unreadable ? .unreadable : .absent
         }
 
         /// Attributes-only existence probe (never requests `kSecReturnData`).

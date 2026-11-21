@@ -552,23 +552,80 @@ final class AntigravityTests: XCTestCase {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("notchstats-gemini-ro-\(UUID().uuidString)")
         let geminiDir = dir.appendingPathComponent(".gemini")
+        let agyDir = geminiDir.appendingPathComponent("antigravity-cli")
         try FileManager.default.createDirectory(at: geminiDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: agyDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 
+        let agyFile = agyDir.appendingPathComponent("antigravity-oauth-token")
+        let agyBody = Data(#"{"token":{"access_token":"synthetic-agy-token","expiry":"2099-01-01T00:00:00Z"}}"#.utf8)
+        try agyBody.write(to: agyFile)
+
         let credFile = geminiDir.appendingPathComponent("oauth_creds.json")
-        let body = Data(#"{"access_token":"synthetic-ro-token","expiry_date":4102444800000}"#.utf8)
+        let body = Data(#"{"access_token":"synthetic-ro-token","expiry_date":1750830000000}"#.utf8)
         try body.write(to: credFile)
         let before = try FileManager.default.attributesOfItem(atPath: credFile.path)[.modificationDate] as? Date
 
-        let read = C.Store.liveFileRead(environment: ["GEMINI_CLI_HOME": dir.path])
-        XCTAssertEqual(read, .data(body))
+        let read = C.Store.liveFileRead(environment: ["GEMINI_CLI_HOME": dir.path],
+                                        homeDirectory: dir.path)
+        XCTAssertEqual(read, .data(agyBody),
+                       "the live agy login must win over the stale oauth_creds.json")
 
         let after = try FileManager.default.attributesOfItem(atPath: credFile.path)[.modificationDate] as? Date
         XCTAssertEqual(before, after, "reading credentials must not modify the file")
 
-        let entries = try FileManager.default.contentsOfDirectory(atPath: geminiDir.path)
-        XCTAssertEqual(entries, ["oauth_creds.json"],
+        let geminiEntries = try FileManager.default.contentsOfDirectory(atPath: geminiDir.path)
+        XCTAssertEqual(geminiEntries, ["oauth_creds.json", "antigravity-cli"],
                        "reading credentials must never create lock or sidecar files")
+        let agyEntries = try FileManager.default.contentsOfDirectory(atPath: agyDir.path)
+        XCTAssertEqual(agyEntries, ["antigravity-oauth-token"],
+                       "reading credentials must never create lock or sidecar files")
+    }
+
+    func testLiveFileReadPrefersUnexpiredOverExpiredAcrossSources() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("notchstats-gemini-pref-\(UUID().uuidString)")
+        let geminiDir = dir.appendingPathComponent(".gemini")
+        let agyDir = geminiDir.appendingPathComponent("antigravity-cli")
+        try FileManager.default.createDirectory(at: agyDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // Stale agy file (the regression in this repo: a June-2025-style token)
+        // with a live oauth_creds.json — the live file must win.
+        let agyFile = agyDir.appendingPathComponent("antigravity-oauth-token")
+        try Data(#"{"token":{"access_token":"old-agy-token","expiry":"2025-06-25T00:00:00Z"}}"#.utf8)
+            .write(to: agyFile)
+        let credFile = geminiDir.appendingPathComponent("oauth_creds.json")
+        try Data(#"{"access_token":"live-file-token","expiry_date":4102444800000}"#.utf8)
+            .write(to: credFile)
+
+        let live = C.Store.liveFileRead(environment: ["GEMINI_CLI_HOME": dir.path],
+                                        homeDirectory: dir.path)
+        XCTAssertEqual(live, .data(Data(#"{"access_token":"live-file-token","expiry_date":4102444800000}"#.utf8)))
+
+        // Re-login: a fresh agy token must win over everything.
+        try Data(#"{"token":{"access_token":"fresh-agy-token","expiry":"2099-01-01T00:00:00Z"}}"#.utf8)
+            .write(to: agyFile)
+        try Data(#"{"access_token":"stale-file-token","expiry_date":1750830000000}"#.utf8)
+            .write(to: credFile)
+        let fresh = C.Store.liveFileRead(environment: ["GEMINI_CLI_HOME": dir.path],
+                                         homeDirectory: dir.path)
+        XCTAssertEqual(fresh, .data(Data(#"{"token":{"access_token":"fresh-agy-token","expiry":"2099-01-01T00:00:00Z"}}"#.utf8)))
+
+        // No live token anywhere: the freshest expired token is surfaced (so the
+        // UI can honestly report expiry) — here the newer-styled agy token.
+        try Data(#"{"token":{"access_token":"old-agy-token","expiry":"2025-06-25T06:00:00Z"}}"#.utf8)
+            .write(to: agyFile)
+        try Data(#"{"access_token":"ancient-file-token","expiry_date":1750830000000}"#.utf8)
+            .write(to: credFile)
+        let expired = C.Store.liveFileRead(environment: ["GEMINI_CLI_HOME": dir.path],
+                                           homeDirectory: dir.path)
+        XCTAssertEqual(expired, .data(Data(#"{"token":{"access_token":"old-agy-token","expiry":"2025-06-25T06:00:00Z"}}"#.utf8)))
+    }
+
+    func testAntigravityTokenFilePathLivesInGeminiCliDataDir() {
+        XCTAssertEqual(C.Store.antigravityTokenFilePath(homeDirectory: "/Users/example"),
+                       "/Users/example/.gemini/antigravity-cli/antigravity-oauth-token")
     }
 
     func testFetchShowsUnsharedRowWhenKeychainItemNotShared() async {
