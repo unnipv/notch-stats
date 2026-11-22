@@ -89,6 +89,9 @@ struct ProviderUsage: Identifiable, Sendable, Equatable {
     var issue: ProviderIssue? = nil
     /// The reading is from an earlier refresh because the latest one failed.
     var isStale = false
+    /// When a stale tap reading was captured; `nil` for live and
+    /// credential-based readings.
+    var asOf: Date? = nil
     var metrics: [UsageMetric] = []
 
     var headline: UsageWindow? { windows.first }

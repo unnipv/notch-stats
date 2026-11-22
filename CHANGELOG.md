@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.2
+
+- A stale usage-tap reading no longer looks current. The row now says how old
+  it is ("Last reading · 42m ago"), and a window whose reset time has passed
+  since the capture shows as unused (100% left, no reset) with a hint that the
+  window reset, instead of repeating the pre-reset percentage.
+
 ## 0.3.1
 
 - Clicking anywhere outside the expanded island now collapses it (a global

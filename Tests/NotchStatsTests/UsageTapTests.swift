@@ -260,6 +260,117 @@ final class UsageTapTests: XCTestCase {
         XCTAssertEqual(usage.windows.count, 2)
     }
 
+    // MARK: - Stale honesty
+
+    /// A capture whose reading was taken at `capturedAt`, evaluated at `now`.
+    private func tapCapture(_ kind: UsageTapProviderKind, json: String, capturedAt: Date) throws -> UsageTap.Capture {
+        let data = Data(json.utf8)
+        let reading = kind == .claude ? UsageTap.parseClaude(data) : UsageTap.parseAntigravity(data)
+        return UsageTap.Capture(kind: kind, data: data, modifiedAt: capturedAt, reading: try XCTUnwrap(reading))
+    }
+
+    func testResetWindowDecaysToFullRemaining() throws {
+        let now = Date(timeIntervalSince1970: 1_795_400_000)
+        let past = Int(now.timeIntervalSince1970) - 600
+        let future = Int(now.timeIntervalSince1970) + 7200
+        let json = #"{"model":{"id":"claude-opus-5-5"},"rate_limits":{"#
+            + #""five_hour":{"used_percentage":80,"resets_at":\#(past)},"#
+            + #""seven_day":{"used_percentage":30,"resets_at":\#(future)}}}"#
+        let capture = try tapCapture(.claude, json: json, capturedAt: now.addingTimeInterval(-42 * 60))
+
+        let usage = UsageTap.usage(capture, id: ClaudeProvider.id, name: "Claude", accentHex: "#000000",
+                                   order: 0, note: nil, stale: true, now: now)
+        XCTAssertEqual(usage.windows[0].remaining, 1, "a rolled-over window reads as unused")
+        XCTAssertNil(usage.windows[0].resetsAt)
+        XCTAssertEqual(usage.windows[0].id, "5h")
+        XCTAssertEqual(usage.windows[1].percent, 0.3, accuracy: 1e-9, "a future reset is untouched")
+        XCTAssertEqual(usage.windows[1].resetsAt, Date(timeIntervalSince1970: TimeInterval(future)))
+        let hint = try XCTUnwrap(usage.hint)
+        XCTAssertEqual(hint, "Window reset since this capture")
+        XCTAssertLessThanOrEqual(hint.count, 44)
+
+        // Nothing reset → no hint at all.
+        let unreset = UsageTap.usage(capture, id: ClaudeProvider.id, name: "Claude", accentHex: "#000000",
+                                     order: 0, note: nil, stale: true, now: now.addingTimeInterval(-900))
+        XCTAssertEqual(unreset.windows[0].percent, 0.8, accuracy: 1e-9)
+        XCTAssertNil(unreset.hint)
+
+        // A reset that predates the capture already belongs to the capture's
+        // window: decaying it would erase real post-reset usage.
+        let afterReset = try tapCapture(.claude, json: json, capturedAt: now.addingTimeInterval(-60))
+        let fresh = UsageTap.usage(afterReset, id: ClaudeProvider.id, name: "Claude", accentHex: "#000000",
+                                   order: 0, note: nil, stale: false, now: now)
+        XCTAssertEqual(fresh.windows[0].percent, 0.8, accuracy: 1e-9, "a post-reset capture keeps its usage")
+        XCTAssertEqual(fresh.windows[0].resetsAt, Date(timeIntervalSince1970: TimeInterval(past)))
+
+        // Same for a capture taken exactly now.
+        let brandNew = try tapCapture(.claude, json: json, capturedAt: now)
+        let live = UsageTap.usage(brandNew, id: ClaudeProvider.id, name: "Claude", accentHex: "#000000",
+                                  order: 0, note: nil, stale: false, now: now)
+        XCTAssertEqual(live.windows[0].percent, 0.8, accuracy: 1e-9)
+    }
+
+    func testGeminiResetBucketDecaysToFullRemaining() throws {
+        let now = try XCTUnwrap(isoDate("2026-11-22T10:00:00Z"))
+        let json = """
+        {"quota": {
+          "gemini-5h":     { "remaining_fraction": 0.2, "reset_time": "2026-11-22T09:30:00Z" },
+          "gemini-weekly": { "remaining_fraction": 0.6, "reset_time": "2026-11-28T09:12:12Z" }
+        }}
+        """
+        let capture = try tapCapture(.gemini, json: json, capturedAt: now.addingTimeInterval(-42 * 60))
+        let usage = UsageTap.usage(capture, id: AntigravityProvider.id, name: "Gemini", accentHex: "#000000",
+                                   order: 1, note: nil, stale: true, now: now)
+        XCTAssertEqual(usage.windows.map(\.id), ["gemini", "gemini-wk"])
+        XCTAssertEqual(usage.windows[0].remaining, 1)
+        XCTAssertNil(usage.windows[0].resetsAt)
+        XCTAssertEqual(usage.windows[1].remaining, 0.6, accuracy: 1e-9)
+        XCTAssertEqual(usage.windows[1].resetsAt, isoDate("2026-11-28T09:12:12Z"))
+        XCTAssertTrue(usage.hint?.contains("reset") ?? false)
+    }
+
+    func testStaleReadingCarriesAsOf() async throws {
+        let now = Date(timeIntervalSince1970: 1_795_000_000)
+        let old = try capture(.claude, age: 42 * 60, now: now)
+        let stale = UsageTap.usage(old, id: ClaudeProvider.id, name: "Claude", accentHex: "#000000",
+                                   order: 0, note: nil, stale: true, now: now)
+        XCTAssertEqual(stale.asOf, old.modifiedAt)
+
+        let recent = try capture(.claude, age: 30, now: now)
+        let fresh = UsageTap.usage(recent, id: ClaudeProvider.id, name: "Claude", accentHex: "#000000",
+                                   order: 0, note: nil, stale: false, now: now)
+        XCTAssertNil(fresh.asOf)
+
+        // Credential expiry is checked against the wall clock, so use it here.
+        let wall = Date()
+        let oldTap = try capture(.claude, age: 42 * 60, now: wall)
+        let liveJSON = Data(#"{"five_hour":{"utilization":50},"seven_day":{"utilization":10}}"#.utf8)
+        let credential = ClaudeCredentials.Credential(token: "test-oauth-token", kind: .oauth,
+                                                      expiresAt: wall.addingTimeInterval(3600))
+        let loggedIn = ClaudeProvider(resolve: { _ in .found(credential, .file) },
+                                      transport: { _ in (liveJSON, 200) },
+                                      tap: { oldTap }, now: { wall })
+        let live = try await XCTUnwrapAsync(await loggedIn.fetch())
+        XCTAssertNil(live.asOf, "a credential reading never carries a tap capture time")
+    }
+
+    func testStaleSecondaryLabel() {
+        let now = Date(timeIntervalSince1970: 1_795_000_000)
+        let window = UsageWindow(id: "5h", label: "5h", percent: 0.3, resetsAt: nil)
+        var stale = ProviderUsage(id: ClaudeProvider.id, name: "Claude", accentHex: "#000000", order: 0,
+                                  windows: [window], note: "Opus 5.5", error: nil)
+        stale.isStale = true
+        stale.asOf = now.addingTimeInterval(-42 * 60)
+        XCTAssertEqual(ProviderRow.secondaryLabel(for: stale, now: now), "Last reading · 42m ago")
+
+        stale.asOf = nil
+        XCTAssertEqual(ProviderRow.secondaryLabel(for: stale, now: now), "Last reading")
+
+        let live = ProviderUsage(id: ClaudeProvider.id, name: "Claude", accentHex: "#000000", order: 0,
+                                 windows: [window], note: "Opus 5.5", error: nil)
+        XCTAssertEqual(ProviderRow.secondaryLabel(for: live, now: now), "Opus 5.5")
+    }
+
     // MARK: - Installer
 
     private func makeInstaller() throws -> UsageTapInstaller {

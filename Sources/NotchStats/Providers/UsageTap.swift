@@ -188,13 +188,28 @@ enum UsageTap {
     /// ("Last reading") exactly like a kept `lastGood` reading, with its age as
     /// the hint. `note` is a better caller-supplied note (a cached plan tier);
     /// without one, the payload's model name is shown.
+    ///
+    /// A window whose reset has already passed is shown as unused (0%, no
+    /// reset): it rolled over after the capture, so the captured percentage is
+    /// no longer true and "nothing used yet" is the only defensible reading.
     static func usage(_ capture: Capture, id: String, name: String, accentHex: String, order: Int,
                       note: String?, stale: Bool, now: Date = Date()) -> ProviderUsage {
+        var decayed = false
+        let windows = capture.windows.map { window -> UsageWindow in
+            // Only a reset that landed *after* the capture can have invalidated
+            // it. A capture taken after its own reset time already reflects the
+            // new window, so its percentage must survive.
+            guard let reset = window.resetsAt,
+                  reset > capture.modifiedAt, reset <= now else { return window }
+            decayed = true
+            return UsageWindow(id: window.id, label: window.label, percent: 0, resetsAt: nil)
+        }
         var usage = ProviderUsage(id: id, name: name, accentHex: accentHex, order: order,
-                                  windows: capture.windows, note: note ?? capture.reading.note, error: nil)
+                                  windows: windows, note: note ?? capture.reading.note, error: nil)
         if stale {
             usage.isStale = true
-            usage.hint = "Usage tap · \(Format.ago(capture.modifiedAt, now: now)) old"
+            usage.asOf = capture.modifiedAt
+            usage.hint = decayed ? "Window reset since this capture" : nil
         }
         return usage
     }

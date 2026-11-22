@@ -162,8 +162,16 @@ struct ProviderRow: View {
     }
 
     /// The plan, or — when the reading is old — why.
-    private var secondary: String? {
-        if provider.isStale { return "Last reading" }
+    private var secondary: String? { Self.secondaryLabel(for: provider, now: Date()) }
+
+    /// Pure form of `secondary`, unit-tested. A stale reading says how old it
+    /// is when the capture time is known, so an hours-old number never reads
+    /// as current.
+    static func secondaryLabel(for provider: ProviderUsage, now: Date) -> String? {
+        if provider.isStale {
+            guard let asOf = provider.asOf else { return "Last reading" }
+            return "Last reading · \(Format.ago(asOf, now: now)) ago"
+        }
         guard provider.error == nil else { return nil }
         if provider.windows.isEmpty { return provider.metrics.isEmpty ? provider.note : "API usage" }
         return Self.planLabel(for: provider)
@@ -194,7 +202,12 @@ struct ProviderRow: View {
             return [provider.name, error, provider.hint].compactMap { $0 }.joined(separator: ". ")
         }
         var parts = [provider.name]
-        if provider.isStale { parts.append("last reading") }
+        if provider.isStale {
+            // Speak the age, not just "last reading": an old figure must not
+            // sound current.
+            parts.append(Self.secondaryLabel(for: provider, now: Date()) ?? "last reading")
+            if let hint = provider.hint { parts.append(hint) }
+        }
         for window in provider.windows {
             var text = "\(window.label) window, \(Format.percent(window.remaining)) left"
             if let reset = Format.countdown(to: window.resetsAt) { text += ", resets in \(reset)" }
