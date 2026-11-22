@@ -24,7 +24,7 @@ final class IslandHostingView<Content: View>: NSHostingView<Content> {
             rect = CGRect(x: (bounds.width - size.width) / 2,
                           y: bounds.height - size.height, width: size.width, height: size.height)
         }
-        let padded = rect.insetBy(dx: -10, dy: -10)
+        let padded = rect.insetBy(dx: -IslandGeometry.hitPadding, dy: -IslandGeometry.hitPadding)
         guard padded.contains(local) else { return nil }
         return super.hitTest(point) ?? self
     }
@@ -76,6 +76,12 @@ final class ScreenIsland {
         panel.orderFrontRegardless()
     }
 
+    /// Where the visible island currently sits on screen (not the window,
+    /// which is always `maxSize`).
+    var islandScreenFrame: CGRect {
+        geometry.islandFrame(size: hosting.islandSize())
+    }
+
     /// Renders the island over a stand-in wallpaper and writes a PNG. Debug
     /// aid for `NOTCHSTATS_SNAPSHOT`; used because screen capture needs a
     /// permission this process shouldn't ask for.
@@ -115,13 +121,7 @@ final class ScreenIsland {
     }
 
     func reposition() {
-        let size = Self.maxSize
-        let frame = geometry.screen.frame
-
-        let topGap: CGFloat = geometry.hasNotch ? 0 : 6
-        let origin = CGPoint(x: frame.midX - size.width / 2,
-                             y: frame.maxY - size.height - topGap)
-        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        panel.setFrame(geometry.islandFrame(size: Self.maxSize), display: true)
     }
 }
 
@@ -131,10 +131,16 @@ final class ScreenIsland {
 final class IslandWindowController {
     private let store: AppStore
     private var islands: [ScreenIsland] = []
+    /// Global mouse-down monitor that collapses the expanded island when the
+    /// click lands outside it. Clicks outside never reach our panel (the hit
+    /// test passes them through), so only a global monitor can see them.
+    /// Mouse-event global monitors need no TCC permission.
+    nonisolated(unsafe) private var clickMonitor: Any?
 
     init(store: AppStore) {
         self.store = store
         rebuild()
+        installClickMonitor()
 
         NotificationCenter.default.addObserver(self,
                                                selector: #selector(screenParametersChanged),
@@ -142,8 +148,35 @@ final class IslandWindowController {
                                                object: nil)
     }
 
+    deinit {
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+    }
+
     func show() {
         islands.forEach { $0.show() }
+    }
+
+    private func installClickMonitor() {
+        guard clickMonitor == nil else { return }
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            // Global monitors deliver events from other apps; `locationInWindow`
+            // is in screen coordinates for an event with no window. Taking it
+            // here, not after the hop, keeps a fast click-and-drag from being
+            // judged by where the pointer ended up.
+            let point = event.locationInWindow
+            Task { @MainActor [weak self] in
+                self?.handleGlobalClick(at: point)
+            }
+        }
+    }
+
+    private func handleGlobalClick(at point: CGPoint) {
+        guard store.state == .expanded else { return }
+        let frames = islands.map(\.islandScreenFrame)
+        guard !IslandGeometry.isOnAnyIsland(point, islandFrames: frames) else { return }
+        store.collapse()
     }
 
     func snapshot(to url: URL) {

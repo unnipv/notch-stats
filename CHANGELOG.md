@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Clicking anywhere outside the expanded island now collapses it (a global
+  mouse-down monitor; no new permission). Clicks on any island, including one
+  on another display, are ignored.
+
 ## 0.3.0
 
 - **Usage tap for Claude and Gemini — no login, no Keychain (opt-in).**

@@ -351,4 +351,7 @@ final class AppStore {
     func toggleExpanded() {
         state = (state == .expanded) ? .collapsed : .expanded
     }
+
+    /// Outside-click dismissal: only ever closes, never opens or changes pages.
+    func collapse() { if state == .expanded { state = .collapsed } }
 }

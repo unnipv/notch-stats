@@ -60,6 +60,37 @@ struct IslandGeometry {
                               earWidth: 126)
     }
 
+    /// Gap between the top of a non-notched display and the floating pill.
+    static let pillTopGap: CGFloat = 6
+
+    /// Extra slop around the visible island that still counts as "on" it —
+    /// shared by the hosting view's hit test and the outside-click test.
+    static let hitPadding: CGFloat = 10
+
+    /// The visible island in screen coordinates (origin bottom-left), given the
+    /// size the island currently occupies. Shared by window placement and the
+    /// outside-click test so the two can never drift.
+    static func islandFrame(in screenFrame: CGRect, hasNotch: Bool, size: CGSize) -> CGRect {
+        let topGap: CGFloat = hasNotch ? 0 : pillTopGap
+        return CGRect(x: screenFrame.midX - size.width / 2,
+                      y: screenFrame.maxY - size.height - topGap,
+                      width: size.width,
+                      height: size.height)
+    }
+
+    func islandFrame(size: CGSize) -> CGRect {
+        Self.islandFrame(in: screen.frame, hasNotch: style == .notch, size: size)
+    }
+
+    /// True when `point` lies on any island, counting `hitPadding` of slop.
+    /// An outside click collapses the expanded island only when this is false.
+    static func isOnAnyIsland(_ point: CGPoint, islandFrames: [CGRect]) -> Bool {
+        islandFrames.contains { frame in
+            frame.width > 0 && frame.height > 0
+                && frame.insetBy(dx: -hitPadding, dy: -hitPadding).contains(point)
+        }
+    }
+
     /// All currently connected displays, notched ones first.
     static func all() -> [IslandGeometry] {
         NSScreen.screens
