@@ -24,14 +24,26 @@ struct ClaudeProvider: UsageProvider {
 
     typealias Resolver = @Sendable (_ force: Bool) async -> ClaudeCredentials.Resolution
     typealias Transport = @Sendable (URLRequest) async throws -> (Data, Int)
+    typealias TapReader = @Sendable () -> UsageTap.Capture?
 
     private let resolve: Resolver
     private let transport: Transport
+    private let readTap: TapReader
+    private let now: @Sendable () -> Date
 
-    init(resolve: @escaping Resolver = { force in await ClaudeCredentials.resolveAsync(force: force) },
-         transport: @escaping Transport = { request in try await Self.liveTransport(request) }) {
-        self.resolve = resolve
+    /// `tap` defaults to the live capture file only when the resolver is live
+    /// too: a test that injects credentials must not pick up a real tap file
+    /// from the developer's home directory.
+    init(resolve: Resolver? = nil,
+         transport: @escaping Transport = { request in try await Self.liveTransport(request) },
+         tap: TapReader? = nil,
+         now: @escaping @Sendable () -> Date = { Date() }) {
+        self.resolve = resolve ?? { force in await ClaudeCredentials.resolveAsync(force: force) }
         self.transport = transport
+        let liveTap: TapReader = { UsageTap.read(.claude) }
+        let noTap: TapReader = { nil }
+        self.readTap = tap ?? (resolve == nil ? liveTap : noTap)
+        self.now = now
     }
 
     private static func liveTransport(_ request: URLRequest) async throws -> (Data, Int) {
@@ -55,17 +67,30 @@ struct ClaudeProvider: UsageProvider {
         return request
     }
 
+    /// Priority: fresh tap > live credentials > stale tap. A fresh tap is what
+    /// Claude Code itself just rendered, so it beats a network round-trip; a
+    /// stale one only stands in when there is no usable credential at all.
     func fetch() async -> ProviderUsage? {
+        let tap = readTap()
+        let clock = now()
+        if let tap, UsageTap.freshness(tap, now: clock) == .fresh {
+            return tapUsage(tap, stale: false, now: clock)
+        }
+
         let resolution = await resolve(false)
 
         guard case let .found(credential, _) = resolution else {
+            if let tap { return tapUsage(tap, stale: true, now: clock) }
             if case let .missing(failure) = resolution { return Self.failure(failure) }
             return Self.failure(.notSignedIn)
         }
 
         // Don't spend a request on an OAuth token we already know is stale.
         // Claude Code renews it itself; we re-read on the normal cadence.
-        if credential.isExpired() { return Self.expired() }
+        if credential.isExpired() {
+            if let tap { return tapUsage(tap, stale: true, now: clock) }
+            return Self.expired()
+        }
 
         do {
             let (data, status) = try await transport(Self.usageRequest(for: credential))
@@ -90,6 +115,13 @@ struct ClaudeProvider: UsageProvider {
         } catch {
             return Self.transportFailure(error)
         }
+    }
+
+    /// The tap has no plan tier; the note is the payload's model name, never a
+    /// guessed plan.
+    private func tapUsage(_ capture: UsageTap.Capture, stale: Bool, now: Date) -> ProviderUsage {
+        UsageTap.usage(capture, id: Self.id, name: Self.name, accentHex: Self.accent, order: Self.order,
+                       note: nil, stale: stale, now: now)
     }
 
     // MARK: - Failure states (unit-tested)

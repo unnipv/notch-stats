@@ -37,6 +37,7 @@ struct AntigravityProvider: UsageProvider {
 
     typealias Resolver = @Sendable (_ force: Bool) async -> AntigravityCredentials.Resolution
     typealias Transport = @Sendable (URLRequest) async throws -> (Data, Int)
+    typealias TapReader = @Sendable () -> UsageTap.Capture?
 
     private static let sharedAccountCache = Locked<AccountContext?>(nil)
 
@@ -47,13 +48,24 @@ struct AntigravityProvider: UsageProvider {
     private let resolve: Resolver
     private let transport: Transport
     private let accountCache: Locked<AccountContext?>
+    private let readTap: TapReader
+    private let now: @Sendable () -> Date
 
-    init(resolve: @escaping Resolver = { force in await AntigravityCredentials.resolveAsync(force: force) },
+    /// `tap` defaults to the live capture file only when the resolver is live
+    /// too: a test that injects credentials must not pick up a real tap file
+    /// from the developer's home directory.
+    init(resolve: Resolver? = nil,
          transport: @escaping Transport = { request in try await Self.liveTransport(request) },
-         accountCache: Locked<AccountContext?>? = nil) {
-        self.resolve = resolve
+         accountCache: Locked<AccountContext?>? = nil,
+         tap: TapReader? = nil,
+         now: @escaping @Sendable () -> Date = { Date() }) {
+        self.resolve = resolve ?? { force in await AntigravityCredentials.resolveAsync(force: force) }
         self.transport = transport
         self.accountCache = accountCache ?? Self.sharedAccountCache
+        let liveTap: TapReader = { UsageTap.read(.gemini) }
+        let noTap: TapReader = { nil }
+        self.readTap = tap ?? (resolve == nil ? liveTap : noTap)
+        self.now = now
     }
 
     private static func liveTransport(_ request: URLRequest) async throws -> (Data, Int) {
@@ -91,9 +103,19 @@ struct AntigravityProvider: UsageProvider {
         return request
     }
 
+    /// Priority: fresh tap > live credentials > stale tap. A fresh tap is what
+    /// `agy` itself just rendered, so it beats two network round-trips; a stale
+    /// one only stands in when there is no usable credential at all.
     func fetch() async -> ProviderUsage? {
+        let tap = readTap()
+        let clock = now()
+        if let tap, UsageTap.freshness(tap, now: clock) == .fresh {
+            return tapUsage(tap, stale: false, now: clock)
+        }
+
         let resolution = await resolve(false)
         guard case let .found(initialCredential, _) = resolution else {
+            if let tap { return tapUsage(tap, stale: true, now: clock) }
             if case let .missing(failure) = resolution {
                 // Omit the row when Antigravity / Gemini isn't installed or signed in.
                 if failure == .notSignedIn { return nil }
@@ -102,7 +124,10 @@ struct AntigravityProvider: UsageProvider {
             return nil
         }
 
-        if initialCredential.isExpired() { return Self.expired() }
+        if initialCredential.isExpired() {
+            if let tap { return tapUsage(tap, stale: true, now: clock) }
+            return Self.expired()
+        }
 
         var activeCredential = initialCredential
         var retriedAfter401 = false
@@ -152,6 +177,15 @@ struct AntigravityProvider: UsageProvider {
         } catch {
             return Self.transportFailure(error)
         }
+    }
+
+    /// The tap names the model that is spending the quota; that is more useful
+    /// than a plan tier and is always present. A tier note from an earlier
+    /// `loadCodeAssist` only stands in when the payload has no model.
+    private func tapUsage(_ capture: UsageTap.Capture, stale: Bool, now: Date) -> ProviderUsage {
+        let note = capture.reading.note ?? accountCache.withLock { $0 }?.tierNote
+        return UsageTap.usage(capture, id: Self.id, name: Self.name, accentHex: Self.accent, order: Self.order,
+                              note: note, stale: stale, now: now)
     }
 
     private enum RetryOutcome {

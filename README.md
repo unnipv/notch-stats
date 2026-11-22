@@ -41,11 +41,15 @@ you're almost out.
 - **Codex / ChatGPT limits** — the 5-hour window, with reset timer.
 - **Claude limits** — the 5-hour and weekly windows when you sign in with a
   Pro/Max account. An API-key login has no usage limits, and NotchStats says so
-  rather than showing a made-up number.
+  rather than showing a made-up number. Or use **Enable usage tap** (no login,
+  no Keychain): NotchStats reads the limits Claude Code passes to its status
+  line.
 - **Gemini / Antigravity limits** — real quota pools (`Gemini`, or `Pro` /
   `Flash` when distinct, plus `Partner` for 3P Claude/GPT models) with reset
   countdowns and plan tier from your local `agy` / Antigravity login. Omitted
-  when Antigravity isn't installed or signed in.
+  when Antigravity isn't installed or signed in. Or use **Enable usage tap**
+  (no login, no Keychain): NotchStats reads the 5-hour and weekly quota `agy`
+  passes to its status line.
 - **Anthropic API spend** — if you use a pay-as-you-go Anthropic key from
   OpenCode, the month-to-date and today's spend, totalled from OpenCode's own
   per-message cost ledger. Anthropic has no public credit-balance endpoint, so

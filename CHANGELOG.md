@@ -1,15 +1,47 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
-- **Gemini row works with `agy` ≥ 1.5.14 again.**
-  - `agy` 1.5.14 stopped writing the `svce=gemini, acct=antigravity` Keychain
-    item and now stores its login as a plain `0600` file,
-    `~/.gemini/antigravity-cli/antigravity-oauth-token` (same `StoredToken`
-    JSON shape, without the `go-keyring-base64:` wrapper). NotchStats only
-    knew the Keychain item and the stale `~/.gemini/oauth_creds.json`
-    (June-2025 token), so the Gemini row reported **"token expired"** even
-    immediately after a fresh `agy` login.
+- **Usage tap for Claude and Gemini — no login, no Keychain (opt-in).**
+  - Claude Code and `agy` already pass their real limit state to a status-line
+    command on stdin on every render (`rate_limits` for Claude,
+    `quota` buckets for `agy`). **Enable usage tap** in the menu bar installs
+    a tiny helper (`~/Library/Application Support/NotchStats/bin/notchstats-tap.sh`)
+    as the status line of both CLIs; it saves that JSON to
+    `~/Library/Application Support/NotchStats/tap/<claude|gemini>.json`
+    (`0600`) and NotchStats reads it. No credentials, no token rotation, no
+    network request.
+  - Priority per poll: a tap capture under 10 minutes old wins, then live
+    credentials, then an older capture (shown dimmed as "Last reading") when
+    there is no usable login at all.
+  - Install asks first and names both files it edits
+    (`~/.claude/settings.json`, honouring `CLAUDE_CONFIG_DIR`, and
+    `~/.gemini/antigravity-cli/settings.json`). Each is backed up to
+    `<file>.notchstats-<unixtime>.bak` before any change, every other key is
+    kept, an existing custom status line is chained so it keeps rendering,
+    and agy's own status line stays visible (`stack_with_default`). A
+    settings file that isn't valid JSON is refused, never overwritten.
+  - **Disable usage tap** restores the exact previous `statusLine` (or
+    removes the key if there was none), unless you changed it by hand since.
+  - Unused `agy` partner buckets (`3p-*`, `remaining_fraction: 1` with a
+    1970 reset time) are skipped, and a placeholder reset on any other window
+    keeps its percentage with no countdown, so a row never says "resets 56
+    years ago". The tap carries no plan tier: the row shows the model in use
+    (`model.display_name`) instead, or Gemini's plan if one was fetched earlier.
+  - Settings edits re-check the file just before replacing it and re-apply
+    once if the CLI wrote it meanwhile; the replace keeps the file's extended
+    attributes and ACLs. A settings file NotchStats created is deleted on
+    disable if nothing else was added to it.
+
+- **Gemini row follows `agy`'s login across storage layouts.**
+  - `agy` does not keep its login in one place across builds: some `1.5.14`
+    installations write a plain `0600`
+    `~/.gemini/antigravity-cli/antigravity-oauth-token`, while others — the
+    build on this Mac among them — keep the `svce=gemini, acct=antigravity`
+    Keychain item, refreshed on each `agy` run. NotchStats only knew the
+    Keychain item and the stale `~/.gemini/oauth_creds.json` (June-2025
+    token), so the Gemini row could report **"token expired"** immediately
+    after a fresh `agy` login.
   - Both plain files are now read on every poll with the freshest token
     winning (any unexpired token beats an expired one; otherwise the latest
     `expiry` wins), so a re-login via `agy` is picked up on the next tick.

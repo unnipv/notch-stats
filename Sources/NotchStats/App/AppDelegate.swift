@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var forgetClaudeItem: NSMenuItem?
     private var forgetGeminiItem: NSMenuItem?
     private var keychainAccessItem: NSMenuItem?
+    private var usageTapItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         KeychainGuard.disableBackgroundInteraction()
@@ -108,6 +109,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(forgetGemini)
         forgetGeminiItem = forgetGemini
 
+        let usageTap = NSMenuItem(title: Self.usageTapTitle(UsageTapInstaller.live().status()),
+                                  action: #selector(toggleUsageTap), keyEquivalent: "")
+        usageTap.target = self
+        usageTap.toolTip = "Adds a status-line hook to Claude Code and agy that saves the limits they already "
+            + "show into ~/Library/Application Support/NotchStats/tap/. No login, no Keychain, no network. "
+            + "Existing status lines keep working; backups are written before every change."
+        menu.addItem(usageTap)
+        usageTapItem = usageTap
+
         menu.addItem(.separator())
 
         let external = NSMenuItem(title: "Show on External Displays",
@@ -149,6 +159,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         forgetClaudeItem?.isEnabled = CredentialSnapshotStore.exists(provider: .claude)
         forgetGeminiItem?.isEnabled = CredentialSnapshotStore.exists(provider: .gemini)
         keychainAccessItem?.state = store.allowKeychainAccess ? .on : .off
+        usageTapItem?.title = Self.usageTapTitle(UsageTapInstaller.live().status())
+    }
+
+    /// A partial install offers "Enable": installing is idempotent and
+    /// completes it, after which "Disable" restores everything.
+    private static func usageTapTitle(_ status: UsageTapInstaller.Status) -> String {
+        status == .installed ? "Disable usage tap" : "Enable usage tap"
     }
 
     @objc private func refreshNow() {
@@ -169,6 +186,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func forgetGeminiLogin() {
         store.forgetGeminiLogin()
+    }
+
+    @objc private func toggleUsageTap() {
+        let installer = UsageTapInstaller.live()
+        let enabling = installer.status() != .installed
+        if enabling, !confirmUsageTapInstall(installer) { return }
+        do {
+            if enabling { try installer.install() } else { try installer.uninstall() }
+        } catch {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = enabling ? "Couldn't enable the usage tap" : "Couldn't disable the usage tap"
+            alert.informativeText = error.localizedDescription
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
+        usageTapItem?.title = Self.usageTapTitle(installer.status())
+        store.refreshNow()
+    }
+
+    /// Names both files before touching them: they belong to other tools.
+    private func confirmUsageTapInstall(_ installer: UsageTapInstaller) -> Bool {
+        let home = NSHomeDirectory()
+        func tilde(_ url: URL) -> String {
+            url.path.hasPrefix(home) ? "~" + url.path.dropFirst(home.count) : url.path
+        }
+        let alert = NSAlert()
+        alert.messageText = "Enable usage tap?"
+        alert.informativeText = """
+        NotchStats will add a status-line command to:
+
+        • \(tilde(installer.claudeSettingsURL))
+        • \(tilde(installer.geminiSettingsURL))
+
+        It reads the limits Claude Code and agy already show — no login, no Keychain. \
+        A timestamped backup of each file is written first, an existing status line keeps \
+        working, and "Disable usage tap" restores the previous setting.
+        """
+        alert.addButton(withTitle: "Enable")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     @objc private func toggleExternalDisplays(_ sender: NSMenuItem) {
